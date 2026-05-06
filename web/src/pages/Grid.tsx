@@ -1,20 +1,24 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, ImageOff, SkipBack, SkipForward } from "lucide-react";
+import { Eye, SkipBack, SkipForward } from "lucide-react";
 import { api, fetchJson, type Photo, type Project } from "@/api/client";
 import { Badge, Button, Panel, ProgressBar, cn } from "@/components/ui";
 
-export function Grid({ project }: { project: Project }) {
+type GridMode = "all" | "included";
+
+export function Grid({ project, mode = "all" }: { project: Project; mode?: GridMode }) {
   const queryClient = useQueryClient();
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<Photo | null>(null);
   const limit = 80;
+  const skippedFilter = mode === "included" ? false : undefined;
   const photosQuery = useQuery({
-    queryKey: ["photos", project.id, offset, "all"],
-    queryFn: () => api.photos(project.id, { offset, limit }),
+    queryKey: ["photos", project.id, offset, mode],
+    queryFn: () => api.photos(project.id, { offset, limit, skipped: skippedFilter }),
   });
   const patchMutation = useMutation({
-    mutationFn: ({ hash, skipped }: { hash: string; skipped: boolean }) => api.patchPhoto(hash, { skipped }),
+    mutationFn: ({ hash, skipped }: { hash: string; skipped: boolean }) =>
+      api.patchPhoto(hash, { skipped, user_override: !skipped }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["photos", project.id] });
       queryClient.invalidateQueries({ queryKey: ["projects"] });
@@ -23,13 +27,22 @@ export function Grid({ project }: { project: Project }) {
   const data = photosQuery.data;
   const pages = data ? Math.ceil(data.total / limit) : 1;
   const currentPage = Math.floor(offset / limit) + 1;
+  const pageTitle = mode === "included" ? "Included photos" : "All photos";
+  const pageDescription =
+    mode === "included"
+      ? "Only photos currently used for the face anchor and final video. Mark anything questionable as not included."
+      : "Every cataloged photo, sorted by the capture date the app found from EXIF or the AgeLapse filename.";
+
+  useEffect(() => {
+    setOffset(0);
+  }, [project.id, mode]);
 
   return (
     <div className="space-y-4">
       <Panel className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <h2 className="text-xl font-black text-ink">Photos</h2>
-          <p className="mt-1 text-sm font-medium text-ink/55">Sorted by the capture date the app found from EXIF or the AgeLapse filename.</p>
+          <h2 className="text-xl font-black text-ink">{pageTitle}</h2>
+          <p className="mt-1 text-sm font-medium text-ink/55">{pageDescription}</p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="secondary" size="sm" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - limit))}>
@@ -52,7 +65,7 @@ export function Grid({ project }: { project: Project }) {
       </Panel>
 
       {photosQuery.isLoading ? <Panel>Loading photos...</Panel> : null}
-      {data && data.items.length === 0 ? <Panel>No photos cataloged yet.</Panel> : null}
+      {data && data.items.length === 0 ? <Panel>{mode === "included" ? "No included photos yet." : "No photos cataloged yet."}</Panel> : null}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8">
         {data?.items.map((photo) => (
@@ -71,6 +84,7 @@ export function Grid({ project }: { project: Project }) {
 
 function PhotoTile({ photo, onOpen, onToggle }: { photo: Photo; onOpen: () => void; onToggle: () => void }) {
   const quality = photo.quality_score ?? 0;
+  const actionLabel = photo.skipped ? "Include" : "Not include";
   return (
     <div className={cn("overflow-hidden rounded-lg bg-paper shadow-line", photo.skipped && "opacity-55")}>
       <button className="group relative block aspect-square w-full bg-ink/8" onClick={onOpen}>
@@ -85,7 +99,7 @@ function PhotoTile({ photo, onOpen, onToggle }: { photo: Photo; onOpen: () => vo
             {photo.quality_score == null ? "new" : quality.toFixed(2)}
           </Badge>
           <button className="min-h-10 rounded px-2 text-xs font-black text-teal hover:bg-teal/10" onClick={onToggle}>
-            {photo.skipped ? "Include" : "Skip"}
+            {actionLabel}
           </button>
         </div>
         <ProgressBar value={quality} />

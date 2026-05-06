@@ -40,7 +40,8 @@ export default function App() {
       return <Setup currentProject={currentProject} onProjectCreated={(id) => setSelectedProjectId(id)} onRender={() => setPage("render")} />;
     }
     if (!currentProject) return <EmptyProject onSetup={() => setPage("setup")} />;
-    if (page === "grid") return <Grid project={currentProject} />;
+    if (page === "grid") return <Grid project={currentProject} mode="all" />;
+    if (page === "included") return <Grid project={currentProject} mode="included" />;
     if (page === "outliers") return <Outliers project={currentProject} />;
     if (page === "stats") return <Stats project={currentProject} />;
     if (page === "render") return <Render project={currentProject} />;

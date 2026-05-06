@@ -17,7 +17,7 @@ import type { Project } from "@/api/client";
 import { api, type JobStatus } from "@/api/client";
 import { Badge, Button, ProgressBar, cn } from "@/components/ui";
 
-export type PageKey = "setup" | "grid" | "outliers" | "stats" | "render" | "history";
+export type PageKey = "setup" | "grid" | "included" | "outliers" | "stats" | "render" | "history";
 
 const navItems: Array<{ key: PageKey; label: string; icon: typeof FolderOpen }> = [
   { key: "setup", label: "Setup", icon: FolderOpen },
@@ -57,7 +57,7 @@ export function Layout({
             </div>
             <div className="mt-1 text-xs font-semibold text-paper/45">Local face-anchored timelapse</div>
           </div>
-          {currentProject ? <Badge tone="good">{currentProject.active_count} active</Badge> : null}
+          {currentProject ? <Badge tone="good">{currentProject.active_count} included</Badge> : null}
         </div>
 
         <div className="border-b border-paper/10 p-4 lg:p-5">
@@ -74,7 +74,7 @@ export function Layout({
                 onClick={() => onPageChange(item.key)}
                 className={cn(
                   "flex min-h-11 shrink-0 items-center gap-3 rounded-md px-3 text-sm font-bold transition lg:w-full",
-                  currentPage === item.key ? "bg-paper text-ink" : "text-paper/70 hover:bg-paper/8 hover:text-paper",
+                  isNavActive(currentPage, item.key) ? "bg-paper text-ink" : "text-paper/70 hover:bg-paper/8 hover:text-paper",
                 )}
               >
                 <Icon className="h-4 w-4" />
@@ -96,9 +96,20 @@ export function Layout({
               <p className="mt-1 truncate text-sm font-medium text-ink/55">{currentProject?.source_folder ?? "Create a local project to begin"}</p>
             </div>
             <div className="flex flex-wrap gap-2 text-sm font-black">
-              <StatusPill>{currentProject?.photo_count ?? 0} photos</StatusPill>
-              <StatusPill tone="good">{currentProject?.active_count ?? 0} included</StatusPill>
-              <StatusPill tone={currentProject?.skipped_count ? "warn" : "default"}>{currentProject?.skipped_count ?? 0} to review</StatusPill>
+              <StatusPill active={currentPage === "grid"} disabled={!currentProject} onClick={() => onPageChange("grid")}>
+                {currentProject?.photo_count ?? 0} photos
+              </StatusPill>
+              <StatusPill tone="good" active={currentPage === "included"} disabled={!currentProject} onClick={() => onPageChange("included")}>
+                {currentProject?.active_count ?? 0} included
+              </StatusPill>
+              <StatusPill
+                tone={currentProject?.skipped_count ? "warn" : "default"}
+                active={currentPage === "outliers"}
+                disabled={!currentProject}
+                onClick={() => onPageChange("outliers")}
+              >
+                {currentProject?.skipped_count ?? 0} to review
+              </StatusPill>
             </div>
           </div>
           <GlobalProgress
@@ -114,6 +125,11 @@ export function Layout({
 
 function pickVisibleJob(jobs: JobStatus[]) {
   return jobs.find((job) => ["queued", "running"].includes(job.status)) ?? null;
+}
+
+function isNavActive(currentPage: PageKey, navPage: PageKey) {
+  if (navPage === "grid") return currentPage === "grid" || currentPage === "included";
+  return currentPage === navPage;
 }
 
 function GlobalProgress({ job, onCancel }: { job: JobStatus | null; onCancel?: () => void }) {
@@ -160,13 +176,37 @@ function plainJobName(name: string, stage: string | null) {
   return labels[raw] ?? "Working";
 }
 
-function StatusPill({ children, tone = "default" }: { children: React.ReactNode; tone?: "default" | "good" | "warn" }) {
+function StatusPill({
+  children,
+  tone = "default",
+  active = false,
+  disabled = false,
+  onClick,
+}: {
+  children: React.ReactNode;
+  tone?: "default" | "good" | "warn";
+  active?: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
+}) {
   const tones = {
-    default: "border-ink/10 bg-white text-ink",
-    good: "border-teal/25 bg-teal/10 text-teal",
-    warn: "border-coral/25 bg-coral/10 text-coral",
+    default: "border-ink/10 bg-white text-ink hover:border-ink/25",
+    good: "border-teal/25 bg-teal/10 text-teal hover:border-teal/45",
+    warn: "border-coral/25 bg-coral/10 text-coral hover:border-coral/45",
   };
-  return <span className={cn("inline-flex min-h-9 items-center rounded-md border px-3", tones[tone])}>{children}</span>;
+  const className = cn(
+    "inline-flex min-h-9 items-center rounded-md border px-3 transition",
+    tones[tone],
+    active && "ring-2 ring-ink/10",
+    onClick && "cursor-pointer hover:-translate-y-0.5 hover:shadow-line focus:outline-none focus:ring-2 focus:ring-teal/30",
+    disabled && "cursor-default opacity-55 hover:translate-y-0",
+  );
+  if (!onClick) return <span className={className}>{children}</span>;
+  return (
+    <button type="button" className={className} disabled={disabled} onClick={onClick}>
+      {children}
+    </button>
+  );
 }
 
 function ProjectDropdown({
@@ -225,7 +265,7 @@ function ProjectDropdown({
             {currentProject?.name ?? "No projects yet"}
           </span>
           <span className="mt-0.5 block truncate text-xs font-semibold text-ink/55">
-            {currentProject ? `${currentProject.photo_count} photos · ${currentProject.active_count} active` : "Create one from Setup"}
+            {currentProject ? `${currentProject.photo_count} photos · ${currentProject.active_count} included` : "Create one from Setup"}
           </span>
         </span>
         <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-ink text-paper">
