@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from selfietl.api import photos, projects, renders, system
+from selfietl.config import AppConfig, load_config
+from selfietl.db import Database
+
+
+def create_app(config: AppConfig | None = None) -> FastAPI:
+    config = config or load_config()
+    db = Database(config.db_path)
+    app = FastAPI(title="SelfieTL", version="0.1.0")
+    app.state.config = config
+    app.state.db = db
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    app.include_router(projects.router, prefix="/api")
+    app.include_router(photos.router, prefix="/api")
+    app.include_router(renders.router, prefix="/api")
+    app.include_router(system.router, prefix="/api")
+
+    @app.get("/api/health")
+    def health():
+        return {"ok": True, "data_dir": str(config.data_dir)}
+
+    dist = _web_dist()
+    if dist.exists():
+        assets = dist / "assets"
+        if assets.exists():
+            app.mount("/assets", StaticFiles(directory=assets), name="assets")
+
+        @app.get("/{path:path}", include_in_schema=False)
+        def spa(path: str):
+            candidate = dist / path
+            if candidate.exists() and candidate.is_file():
+                return FileResponse(candidate)
+            return FileResponse(dist / "index.html")
+    else:
+        @app.get("/", include_in_schema=False)
+        def missing_frontend():
+            return {
+                "app": "SelfieTL",
+                "message": "Frontend bundle not found. Run `cd web && npm install && npm run build`.",
+            }
+
+    return app
+
+
+def _web_dist() -> Path:
+    return Path(__file__).resolve().parents[1] / "web" / "dist"
+
+
+app = create_app()

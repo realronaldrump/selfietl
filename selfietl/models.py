@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
+
+from .config import RenderConfig
+
+
+class CreateProjectRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    source_folder: str = Field(min_length=1)
+
+
+class ProjectResponse(BaseModel):
+    id: int
+    name: str | None
+    source_folder: str
+    created_at: datetime | str | None = None
+    canonical_landmarks_path: str | None = None
+    config: dict[str, Any] | None = None
+    photo_count: int = 0
+    active_count: int = 0
+    skipped_count: int = 0
+
+
+class PhotoResponse(BaseModel):
+    hash: str
+    path: str
+    captured_at: datetime | str
+    width: int | None = None
+    height: int | None = None
+    file_size: int | None = None
+    camera_make: str | None = None
+    camera_model: str | None = None
+    perceptual_hash: str | None = None
+    detected_at: datetime | str | None = None
+    landmarks_path: str | None = None
+    quality_score: float | None = None
+    yaw: float | None = None
+    pitch: float | None = None
+    roll: float | None = None
+    eye_open_ratio: float | None = None
+    mouth_open_ratio: float | None = None
+    skipped: bool = False
+    skip_reason: str | None = None
+    user_override: bool = False
+    thumb_url: str | None = None
+    image_url: str | None = None
+
+
+class PhotoListResponse(BaseModel):
+    items: list[PhotoResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class PatchPhotoRequest(BaseModel):
+    skipped: bool | None = None
+    user_override: bool | None = None
+    skip_reason: str | None = None
+
+
+class StartJobResponse(BaseModel):
+    job_id: str
+    status_url: str
+    events_url: str
+
+
+class JobResponse(BaseModel):
+    id: str
+    name: str
+    status: Literal["queued", "running", "done", "failed", "cancelled"]
+    progress: float = 0
+    stage: str | None = None
+    message: str | None = None
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class RenderRequest(RenderConfig):
+    pass
+
+
+class RenderResponse(BaseModel):
+    id: int
+    project_id: int
+    output_path: str | None = None
+    config: dict[str, Any] | None = None
+    started_at: datetime | str | None = None
+    finished_at: datetime | str | None = None
+    status: str
+    error: str | None = None
