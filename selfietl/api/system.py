@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import platform
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from selfietl.api.deps import get_config
+from selfietl.api.deps import get_config, get_db
 from selfietl.config import AppConfig
+from selfietl.db import Database
+from selfietl.pipeline.images import is_supported_image
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -21,10 +24,27 @@ class RevealRequest(BaseModel):
     path: str | None = None
 
 
+class InboxStatusResponse(BaseModel):
+    path: str
+    total_files: int
+    supported_files: int
+    project_id: int | None
+    cataloged_files: int
+    detected_files: int
+    last_scanned_at: str | None
+    needs_scan: bool
+    needs_detection: bool
+
+
 @router.get("/default-source", response_model=PathResponse)
 def default_source(config: AppConfig = Depends(get_config)):
     path = default_source_folder(config)
     return PathResponse(path=str(path))
+
+
+@router.get("/inbox-status", response_model=InboxStatusResponse)
+def inbox_status(config: AppConfig = Depends(get_config), db: Database = Depends(get_db)):
+    return get_inbox_status(config, db)
 
 
 @router.post("/reveal")
@@ -47,6 +67,57 @@ def pick_folder():
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Could not choose folder: {exc}") from exc
     return PathResponse(path=str(path))
+
+
+def get_inbox_status(config: AppConfig, db: Database) -> InboxStatusResponse:
+    path = default_source_folder(config)
+    files = [item for item in path.iterdir() if item.is_file()]
+    supported = [item for item in files if is_supported_image(item)]
+    project = db.fetchone(
+        "SELECT id, last_scanned_at FROM projects WHERE source_folder = ? ORDER BY created_at DESC LIMIT 1",
+        (str(path),),
+    )
+    project_id = int(project["id"]) if project else None
+    last_scanned_at = str(project["last_scanned_at"]) if project and project["last_scanned_at"] else None
+    cataloged = 0
+    detected = 0
+    if project_id is not None:
+        counts = db.fetchone(
+            """
+            SELECT COUNT(*) AS cataloged,
+                   SUM(CASE WHEN p.detected_at IS NOT NULL THEN 1 ELSE 0 END) AS detected
+            FROM project_photos pp
+            JOIN photos p ON p.hash = pp.photo_hash
+            WHERE pp.project_id = ?
+            """,
+            (project_id,),
+        )
+        cataloged = int(counts["cataloged"] or 0)
+        detected = int(counts["detected"] or 0)
+    latest_mtime = max((item.stat().st_mtime for item in supported), default=0)
+    last_scan_ts = _parse_timestamp(last_scanned_at).timestamp() if last_scanned_at else 0
+    return InboxStatusResponse(
+        path=str(path),
+        total_files=len(files),
+        supported_files=len(supported),
+        project_id=project_id,
+        cataloged_files=cataloged,
+        detected_files=detected,
+        last_scanned_at=last_scanned_at,
+        needs_scan=project_id is None or last_scan_ts < latest_mtime,
+        needs_detection=cataloged > detected,
+    )
+
+
+def _parse_timestamp(value: str | None) -> datetime:
+    if not value:
+        return datetime.fromtimestamp(0)
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return datetime.fromisoformat(value)
 
 
 def default_source_folder(config: AppConfig) -> Path:

@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, FolderOpen, FolderPlus, MousePointer2, Play, Radar, ScanFace } from "lucide-react";
-import { api, type JobStatus, type Project } from "@/api/client";
+import { api, type InboxStatus, type JobStatus, type Project } from "@/api/client";
 import { JobStatus as JobStatusPanel } from "@/components/JobStatus";
-import { Badge, Button, Input, Label, Panel } from "@/components/ui";
+import { Badge, Button, Input, Label, Metric, Panel } from "@/components/ui";
 import { useJobEvents } from "@/hooks/useJobEvents";
 
 export function Setup({
@@ -18,16 +18,49 @@ export function Setup({
   const [sourceFolder, setSourceFolder] = useState("");
   const [jobId, setJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [autoFlow, setAutoFlow] = useState<"idle" | "creating" | "scanning" | "detecting">("idle");
+  const autoStartedRef = useRef(false);
+  const scanStartedForRef = useRef<string | null>(null);
+  const detectionStartedForRef = useRef<number | null>(null);
   const defaultSourceQuery = useQuery({ queryKey: ["default-source"], queryFn: api.defaultSource });
+  const inboxStatusQuery = useQuery({
+    queryKey: ["inbox-status"],
+    queryFn: api.inboxStatus,
+    refetchInterval: 3000,
+  });
+
+  const createMutation = useMutation({
+    mutationFn: api.createProject,
+    onSuccess: async (project) => {
+      setError(null);
+      onProjectCreated(project.id);
+      await queryClient.invalidateQueries({ queryKey: ["projects"] });
+      await queryClient.invalidateQueries({ queryKey: ["inbox-status"] });
+      const started = await api.scan(project.id);
+      scanStartedForRef.current = `${project.id}:${inboxStatusQuery.data?.supported_files ?? 0}`;
+      setAutoFlow("scanning");
+      setJobId(started.job_id);
+    },
+    onError: (err) => setError(err instanceof Error ? err.message : String(err)),
+  });
 
   const onTerminal = useCallback(
-    (_job: JobStatus) => {
+    async (job: JobStatus) => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["inbox-status"] });
       if (currentProject) {
         queryClient.invalidateQueries({ queryKey: ["photos", currentProject.id] });
       }
+      const projectId = currentProject?.id ?? inboxStatusQuery.data?.project_id;
+      if (job.status === "done" && autoFlow === "scanning" && projectId) {
+        setAutoFlow("detecting");
+        const started = await api.detect(projectId);
+        setJobId(started.job_id);
+      } else if (["done", "failed", "cancelled"].includes(job.status)) {
+        setAutoFlow("idle");
+      }
     },
-    [currentProject, queryClient],
+    [autoFlow, currentProject, inboxStatusQuery.data?.project_id, queryClient],
   );
   const job = useJobEvents(jobId, onTerminal);
 
@@ -37,17 +70,58 @@ export function Setup({
     }
   }, [defaultSourceQuery.data?.path, sourceFolder]);
 
-  const createMutation = useMutation({
-    mutationFn: api.createProject,
-    onSuccess: async (project) => {
-      setError(null);
-      onProjectCreated(project.id);
-      await queryClient.invalidateQueries({ queryKey: ["projects"] });
-      const started = await api.scan(project.id);
-      setJobId(started.job_id);
-    },
-    onError: (err) => setError(err instanceof Error ? err.message : String(err)),
-  });
+  useEffect(() => {
+    const status = inboxStatusQuery.data;
+    if (!status || status.supported_files === 0 || autoStartedRef.current || createMutation.isPending) {
+      return;
+    }
+    if (!currentProject && !status.project_id) {
+      autoStartedRef.current = true;
+      setAutoFlow("creating");
+      createMutation.mutate({ name: "Inbox timelapse", source_folder: status.path });
+    }
+  }, [createMutation, currentProject, inboxStatusQuery.data]);
+
+  useEffect(() => {
+    const status = inboxStatusQuery.data;
+    const projectId = currentProject?.id ?? status?.project_id;
+    const scanKey = projectId && status ? `${projectId}:${status.supported_files}` : null;
+    const activeJob = job && ["queued", "running"].includes(job.status);
+    if (!status || !projectId || !scanKey || status.supported_files === 0 || activeJob || scanStartedForRef.current === scanKey) {
+      return;
+    }
+    const isInboxProject = currentProject ? currentProject.source_folder === status.path : true;
+    if (isInboxProject && status.needs_scan) {
+      scanStartedForRef.current = scanKey;
+      setAutoFlow("scanning");
+      api
+        .scan(projectId)
+        .then((started) => setJobId(started.job_id))
+        .catch((err) => {
+          setAutoFlow("idle");
+          setError(err instanceof Error ? err.message : String(err));
+        });
+    }
+  }, [currentProject, inboxStatusQuery.data, job]);
+
+  useEffect(() => {
+    const status = inboxStatusQuery.data;
+    const projectId = currentProject?.id ?? status?.project_id;
+    const activeJob = job && ["queued", "running"].includes(job.status);
+    const isInboxProject = currentProject && status ? currentProject.source_folder === status.path : Boolean(status?.project_id);
+    if (!status || !projectId || activeJob || status.needs_scan || !status.needs_detection || !isInboxProject || detectionStartedForRef.current === projectId) {
+      return;
+    }
+    detectionStartedForRef.current = projectId;
+    setAutoFlow("detecting");
+    api
+      .detect(projectId)
+      .then((started) => setJobId(started.job_id))
+      .catch((err) => {
+        setAutoFlow("idle");
+        setError(err instanceof Error ? err.message : String(err));
+      });
+  }, [currentProject, inboxStatusQuery.data, job]);
 
   async function start(kind: "scan" | "detect" | "recompute") {
     if (!currentProject) return;
@@ -125,6 +199,7 @@ export function Setup({
             </p>
           </div>
         </div>
+        <InboxImportStatus status={inboxStatusQuery.data} autoFlow={autoFlow} />
         <div className="mt-5 flex flex-wrap gap-2">
           <Button
             disabled={createMutation.isPending || !name.trim() || !sourceFolder.trim()}
@@ -172,6 +247,52 @@ export function Setup({
 
       <div className="xl:col-span-2">
         <JobStatusPanel job={job} onCancel={jobId ? () => api.cancelJob(jobId) : undefined} />
+      </div>
+    </div>
+  );
+}
+
+function InboxImportStatus({
+  status,
+  autoFlow,
+}: {
+  status: InboxStatus | undefined;
+  autoFlow: "idle" | "creating" | "scanning" | "detecting";
+}) {
+  if (!status || status.supported_files === 0) {
+    return (
+      <div className="mt-5 rounded-md border border-ink/10 bg-white p-3 text-sm font-semibold text-ink/55">
+        Drop photos into the app inbox and this page will notice them automatically.
+      </div>
+    );
+  }
+
+  const stateText =
+    autoFlow === "creating"
+      ? "Creating inbox project"
+      : autoFlow === "scanning"
+        ? "Cataloging inbox photos"
+        : autoFlow === "detecting"
+          ? "Detecting faces"
+          : status.needs_scan
+            ? "Inbox has uncataloged files"
+            : status.needs_detection
+              ? "Cataloged photos are ready for face detection"
+              : "Inbox is up to date";
+
+  return (
+    <div className="mt-5 rounded-lg border border-teal/25 bg-teal/10 p-3">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <div className="text-sm font-black text-ink">{stateText}</div>
+          <div className="mt-1 break-all font-mono text-xs font-semibold text-ink/55">{status.path}</div>
+        </div>
+        <Badge tone={status.needs_scan || status.needs_detection ? "warn" : "good"}>{autoFlow === "idle" ? "watching" : autoFlow}</Badge>
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        <Metric label="Files" value={status.supported_files} />
+        <Metric label="Cataloged" value={status.cataloged_files} tone={status.cataloged_files ? "good" : "default"} />
+        <Metric label="Detected" value={status.detected_files} tone={status.detected_files ? "good" : "default"} />
       </div>
     </div>
   );

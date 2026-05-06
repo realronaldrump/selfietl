@@ -51,21 +51,21 @@ def get_project(project_id: int, db: Database = Depends(get_db)):
 @router.post("/{project_id}/scan", response_model=StartJobResponse)
 async def scan(project_id: int, db: Database = Depends(get_db), config: AppConfig = Depends(get_config)):
     _ensure_project(db, project_id)
-    job = runner.start("scan", lambda progress, cancel: scan_project(db, config, project_id, progress))
+    job = runner.start(f"scan:{project_id}", lambda progress, cancel: scan_project(db, config, project_id, progress, cancel))
     return _job_response(job.id)
 
 
 @router.post("/{project_id}/detect", response_model=StartJobResponse)
 async def detect(project_id: int, db: Database = Depends(get_db), config: AppConfig = Depends(get_config)):
     _ensure_project(db, project_id)
-    job = runner.start("detect", lambda progress, cancel: detect_project(db, config, project_id, progress))
+    job = runner.start(f"detect:{project_id}", lambda progress, cancel: detect_project(db, config, project_id, progress, cancel_check=cancel))
     return _job_response(job.id)
 
 
 @router.post("/{project_id}/recompute", response_model=StartJobResponse)
 async def recompute(project_id: int, db: Database = Depends(get_db), config: AppConfig = Depends(get_config)):
     _ensure_project(db, project_id)
-    job = runner.start("canonical", lambda progress, cancel: {"canonical_path": str(compute_canonical_face(db, config, project_id, progress))})
+    job = runner.start(f"canonical:{project_id}", lambda progress, cancel: {"canonical_path": str(compute_canonical_face(db, config, project_id, progress))})
     return _job_response(job.id)
 
 

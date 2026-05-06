@@ -94,6 +94,18 @@ export type PathResponse = {
   path: string;
 };
 
+export type InboxStatus = {
+  path: string;
+  total_files: number;
+  supported_files: number;
+  project_id: number | null;
+  cataloged_files: number;
+  detected_files: number;
+  last_scanned_at: string | null;
+  needs_scan: boolean;
+  needs_detection: boolean;
+};
+
 export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
@@ -134,6 +146,7 @@ export const api = {
   renders: (projectId: number) => fetchJson<Render[]>(`/api/projects/${projectId}/renders`),
   cancelJob: (jobId: string) => fetchJson(`/api/jobs/${jobId}`, { method: "DELETE" }),
   defaultSource: () => fetchJson<PathResponse>("/api/system/default-source"),
+  inboxStatus: () => fetchJson<InboxStatus>("/api/system/inbox-status"),
   revealFolder: (path?: string | null) =>
     fetchJson<{ ok: boolean; path: string }>("/api/system/reveal", { method: "POST", body: JSON.stringify({ path: path || null }) }),
   pickFolder: () => fetchJson<PathResponse>("/api/system/pick-folder", { method: "POST" }),

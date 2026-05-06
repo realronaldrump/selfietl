@@ -14,6 +14,7 @@ from selfietl.pipeline.images import open_oriented_image
 from selfietl.pipeline.score import compute_quality_score
 
 Progress = Callable[[str, int, int, str], None]
+CancelCheck = Callable[[], None]
 
 
 @dataclass
@@ -36,6 +37,7 @@ def detect_project(
     project_id: int,
     progress: Progress | None = None,
     force: bool = False,
+    cancel_check: CancelCheck | None = None,
 ) -> dict:
     where_detected = "" if force else "AND p.detected_at IS NULL"
     rows = db.fetchall(
@@ -53,75 +55,76 @@ def detect_project(
     failed = 0
     warnings: list[dict] = []
 
-    with db.connect() as conn:
-        for idx, row in enumerate(rows):
-            photo_hash = row["hash"]
-            if progress:
-                progress("detect", idx + 1, len(rows), f"Detecting landmarks for {Path(row['path']).name}")
-            try:
-                result = detect_landmarks(Path(row["path"]), config)
-                if result.landmarks is None:
-                    skipped += 1
-                    conn.execute(
-                        """
-                        UPDATE photos
-                        SET detected_at = ?, skipped = 1, skip_reason = ?, quality_score = 0
-                        WHERE hash = ?
-                        """,
-                        (datetime.now().isoformat(sep=" "), "no_face_detected", photo_hash),
-                    )
-                    continue
-
-                landmarks_path = config.landmarks_dir / f"{photo_hash}.npz"
-                landmarks_path.parent.mkdir(parents=True, exist_ok=True)
-                with open_oriented_image(row["path"]) as image:
-                    image_size = np.array([image.width, image.height], dtype=np.int32)
-                np.savez_compressed(
-                    landmarks_path,
-                    landmarks=result.landmarks.astype(np.float32),
-                    bbox=np.array(result.bbox or (0, 0, 0, 0), dtype=np.float32),
-                    image_size=image_size,
-                    confidence=np.array([result.confidence], dtype=np.float32),
-                    method=np.array([result.method]),
-                )
-                quality = compute_quality_score(
-                    confidence=result.confidence,
-                    yaw=result.yaw,
-                    pitch=result.pitch,
-                    roll=result.roll,
-                    eye_open_ratio=result.eye_open_ratio,
-                    landmark_zscore=None,
-                    config=config.quality,
-                ).score
-                should_skip = quality < config.quality.threshold and not bool(row["user_override"])
-                conn.execute(
+    for idx, row in enumerate(rows):
+        if cancel_check:
+            cancel_check()
+        photo_hash = row["hash"]
+        if progress:
+            progress("detect", idx + 1, len(rows), f"Detecting landmarks for {Path(row['path']).name}")
+        try:
+            result = detect_landmarks(Path(row["path"]), config)
+            if result.landmarks is None:
+                skipped += 1
+                db.execute(
                     """
                     UPDATE photos
-                    SET detected_at = ?, landmarks_path = ?, quality_score = ?,
-                        yaw = ?, pitch = ?, roll = ?, eye_open_ratio = ?, mouth_open_ratio = ?,
-                        skipped = ?, skip_reason = ?
+                    SET detected_at = ?, skipped = 1, skip_reason = ?, quality_score = 0
                     WHERE hash = ?
                     """,
-                    (
-                        datetime.now().isoformat(sep=" "),
-                        str(landmarks_path),
-                        quality,
-                        result.yaw,
-                        result.pitch,
-                        result.roll,
-                        result.eye_open_ratio,
-                        result.mouth_open_ratio,
-                        1 if should_skip else 0,
-                        "low_quality" if should_skip else None,
-                        photo_hash,
-                    ),
+                    (datetime.now().isoformat(sep=" "), "no_face_detected", photo_hash),
                 )
-                detected += 1
-                if result.warnings:
-                    warnings.append({"hash": photo_hash, "warnings": result.warnings})
-            except Exception as exc:
-                failed += 1
-                warnings.append({"hash": photo_hash, "warnings": [f"detect_failed:{exc.__class__.__name__}"]})
+                continue
+
+            landmarks_path = config.landmarks_dir / f"{photo_hash}.npz"
+            landmarks_path.parent.mkdir(parents=True, exist_ok=True)
+            with open_oriented_image(row["path"]) as image:
+                image_size = np.array([image.width, image.height], dtype=np.int32)
+            np.savez_compressed(
+                landmarks_path,
+                landmarks=result.landmarks.astype(np.float32),
+                bbox=np.array(result.bbox or (0, 0, 0, 0), dtype=np.float32),
+                image_size=image_size,
+                confidence=np.array([result.confidence], dtype=np.float32),
+                method=np.array([result.method]),
+            )
+            quality = compute_quality_score(
+                confidence=result.confidence,
+                yaw=result.yaw,
+                pitch=result.pitch,
+                roll=result.roll,
+                eye_open_ratio=result.eye_open_ratio,
+                landmark_zscore=None,
+                config=config.quality,
+            ).score
+            should_skip = quality < config.quality.threshold and not bool(row["user_override"])
+            db.execute(
+                """
+                UPDATE photos
+                SET detected_at = ?, landmarks_path = ?, quality_score = ?,
+                    yaw = ?, pitch = ?, roll = ?, eye_open_ratio = ?, mouth_open_ratio = ?,
+                    skipped = ?, skip_reason = ?
+                WHERE hash = ?
+                """,
+                (
+                    datetime.now().isoformat(sep=" "),
+                    str(landmarks_path),
+                    quality,
+                    result.yaw,
+                    result.pitch,
+                    result.roll,
+                    result.eye_open_ratio,
+                    result.mouth_open_ratio,
+                    1 if should_skip else 0,
+                    "low_quality" if should_skip else None,
+                    photo_hash,
+                ),
+            )
+            detected += 1
+            if result.warnings:
+                warnings.append({"hash": photo_hash, "warnings": result.warnings})
+        except Exception as exc:
+            failed += 1
+            warnings.append({"hash": photo_hash, "warnings": [f"detect_failed:{exc.__class__.__name__}"]})
 
     return {
         "total": len(rows),

@@ -49,6 +49,9 @@ class JobRunner:
         self.jobs: dict[str, Job] = {}
 
     def start(self, name: str, work: Callable[[Callable, Callable], dict[str, Any]]) -> Job:
+        for existing in self.jobs.values():
+            if existing.name == name and existing.status in {"queued", "running"}:
+                return existing
         loop = asyncio.get_running_loop()
         job = Job(id=uuid.uuid4().hex, name=name)
         self.jobs[job.id] = job

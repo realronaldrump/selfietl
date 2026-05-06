@@ -18,6 +18,7 @@ from selfietl.pipeline.images import (
 )
 
 Progress = Callable[[str, int, int, str], None]
+CancelCheck = Callable[[], None]
 
 
 def scan_project(
@@ -25,6 +26,7 @@ def scan_project(
     config: AppConfig,
     project_id: int,
     progress: Progress | None = None,
+    cancel_check: CancelCheck | None = None,
 ) -> dict:
     project = db.fetchone("SELECT * FROM projects WHERE id = ?", (project_id,))
     if project is None:
@@ -44,6 +46,8 @@ def scan_project(
 
     with db.connect() as conn:
         for idx, path in enumerate(files):
+            if cancel_check:
+                cancel_check()
             absolute = path.resolve()
             if progress:
                 progress("scan", idx + 1, total, f"Hashing {absolute.name}")
@@ -116,6 +120,10 @@ def scan_project(
             )
             linked += 1
 
+    db.execute(
+        "UPDATE projects SET last_scanned_at = ? WHERE id = ?",
+        (datetime.now().isoformat(sep=" "), project_id),
+    )
     return {
         "total_files": total,
         "inserted": inserted,
@@ -127,15 +135,24 @@ def scan_project(
 
 
 def create_project(db: Database, name: str, source_folder: str, config_snapshot: dict | None = None) -> int:
-    return db.execute(
-        """
-        INSERT INTO projects (name, source_folder, created_at, config_json)
-        VALUES (?, ?, ?, ?)
-        """,
-        (
-            name,
-            str(Path(source_folder).expanduser()),
-            datetime.now().isoformat(sep=" "),
-            json.dumps(config_snapshot or {}),
-        ),
-    )
+    normalized = str(Path(source_folder).expanduser())
+    with db.connect() as conn:
+        existing = conn.execute(
+            "SELECT id FROM projects WHERE source_folder = ? ORDER BY created_at DESC LIMIT 1",
+            (normalized,),
+        ).fetchone()
+        if existing:
+            return int(existing["id"])
+        cur = conn.execute(
+            """
+            INSERT INTO projects (name, source_folder, created_at, config_json)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                name,
+                normalized,
+                datetime.now().isoformat(sep=" "),
+                json.dumps(config_snapshot or {}),
+            ),
+        )
+        return int(cur.lastrowid)

@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS projects (
     name TEXT,
     source_folder TEXT,
     created_at TIMESTAMP,
+    last_scanned_at TIMESTAMP,
     canonical_landmarks_path TEXT,
     config_json TEXT
 );
@@ -77,9 +78,10 @@ class Database:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.path, detect_types=sqlite3.PARSE_DECLTYPES)
+        conn = sqlite3.connect(self.path, detect_types=sqlite3.PARSE_DECLTYPES, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=30000")
         try:
             yield conn
             conn.commit()
@@ -89,6 +91,7 @@ class Database:
     def migrate(self) -> None:
         with sqlite3.connect(self.path) as conn:
             conn.executescript(SCHEMA)
+            _ensure_column(conn, "projects", "last_scanned_at", "TIMESTAMP")
 
     def fetchone(self, query: str, params: tuple[Any, ...] = ()) -> sqlite3.Row | None:
         with self.connect() as conn:
@@ -115,3 +118,9 @@ def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
             except json.JSONDecodeError:
                 result[key.removesuffix("_json")] = None
     return result
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
