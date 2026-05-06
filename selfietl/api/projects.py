@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from selfietl.api.deps import get_config, get_db
 from selfietl.config import AppConfig
 from selfietl.db import Database, row_to_dict
-from selfietl.jobs.runner import runner
+from selfietl.jobs.runner import JobsPaused, runner
 from selfietl.models import CreateProjectRequest, ProjectResponse, StartJobResponse
 from selfietl.pipeline.canonical import compute_canonical_face, project_stats
 from selfietl.pipeline.compose import quick_preview
@@ -51,21 +51,30 @@ def get_project(project_id: int, db: Database = Depends(get_db)):
 @router.post("/{project_id}/scan", response_model=StartJobResponse)
 async def scan(project_id: int, db: Database = Depends(get_db), config: AppConfig = Depends(get_config)):
     _ensure_project(db, project_id)
-    job = runner.start(f"scan:{project_id}", lambda progress, cancel: scan_project(db, config, project_id, progress, cancel))
+    name = f"scan:{project_id}"
+    _ensure_no_other_job(name)
+    job = _start_job(name, lambda progress, cancel: scan_project(db, config, project_id, progress, cancel))
     return _job_response(job.id)
 
 
 @router.post("/{project_id}/detect", response_model=StartJobResponse)
 async def detect(project_id: int, db: Database = Depends(get_db), config: AppConfig = Depends(get_config)):
     _ensure_project(db, project_id)
-    job = runner.start(f"detect:{project_id}", lambda progress, cancel: detect_project(db, config, project_id, progress, cancel_check=cancel))
+    name = f"detect:{project_id}"
+    _ensure_no_other_job(name)
+    job = _start_job(name, lambda progress, cancel: detect_project(db, config, project_id, progress, cancel_check=cancel))
     return _job_response(job.id)
 
 
 @router.post("/{project_id}/recompute", response_model=StartJobResponse)
 async def recompute(project_id: int, db: Database = Depends(get_db), config: AppConfig = Depends(get_config)):
     _ensure_project(db, project_id)
-    job = runner.start(f"canonical:{project_id}", lambda progress, cancel: {"canonical_path": str(compute_canonical_face(db, config, project_id, progress))})
+    name = f"canonical:{project_id}"
+    _ensure_no_other_job(name)
+    job = _start_job(
+        name,
+        lambda progress, cancel: {"canonical_path": str(compute_canonical_face(db, config, project_id, progress, cancel_check=cancel))},
+    )
     return _job_response(job.id)
 
 
@@ -137,6 +146,18 @@ def _project_response(db: Database, project_id: int) -> ProjectResponse:
 def _ensure_project(db: Database, project_id: int) -> None:
     if db.fetchone("SELECT id FROM projects WHERE id = ?", (project_id,)) is None:
         raise HTTPException(status_code=404, detail="Project not found")
+
+
+def _ensure_no_other_job(name: str) -> None:
+    if runner.has_active_jobs(except_name=name):
+        raise HTTPException(status_code=409, detail="The app is already working. Cancel or wait for the current step before starting another one.")
+
+
+def _start_job(name: str, work) -> object:
+    try:
+        return runner.start(name, work)
+    except JobsPaused as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _job_response(job_id: str) -> StartJobResponse:

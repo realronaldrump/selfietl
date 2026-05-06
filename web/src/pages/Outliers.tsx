@@ -26,8 +26,8 @@ export function Outliers({ project }: { project: Project }) {
     <div className="space-y-4">
       <Panel className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <h2 className="text-xl font-black text-ink">Outlier review</h2>
-          <p className="mt-1 text-sm font-medium text-ink/55">Skipped photos can be restored with a user override before recomputing the canonical face.</p>
+          <h2 className="text-xl font-black text-ink">Review skipped photos</h2>
+          <p className="mt-1 text-sm font-medium text-ink/55">These photos looked risky for face matching. Include one only if you want it in the final video.</p>
         </div>
         <Button disabled={items.length === 0 || includeMutation.isPending} onClick={() => includeMutation.mutate(items)}>
           <Check className="h-4 w-4" />

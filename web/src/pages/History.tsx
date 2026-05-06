@@ -9,11 +9,11 @@ export function History({ project }: { project: Project }) {
   return (
     <div className="space-y-4">
       <Panel>
-        <h2 className="text-xl font-black text-ink">Render history</h2>
-        <p className="mt-1 text-sm font-medium text-ink/55">Completed exports stay on disk; the catalog stores only paths and render config snapshots.</p>
+        <h2 className="text-xl font-black text-ink">Video history</h2>
+        <p className="mt-1 text-sm font-medium text-ink/55">Finished MP4 files stay on disk. This page keeps the path so you can find them again.</p>
       </Panel>
       {renders.length === 0 ? (
-        <Panel>No renders yet.</Panel>
+        <Panel>No videos created yet.</Panel>
       ) : (
         <div className="space-y-3">
           {renders.map((render) => (
@@ -41,7 +41,7 @@ function RenderRow({ render }: { render: Render }) {
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone={tone}>{render.status}</Badge>
-          <span className="font-mono text-xs font-bold text-ink/45">render #{render.id}</span>
+          <span className="font-mono text-xs font-bold text-ink/45">video #{render.id}</span>
         </div>
         <div className="mt-2 break-all font-mono text-sm font-semibold text-ink">{render.output_path ?? "No output yet"}</div>
         {render.error ? <div className="mt-2 rounded bg-coral/10 p-2 text-xs font-semibold text-coral">{render.error}</div> : null}

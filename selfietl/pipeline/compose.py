@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -45,8 +46,10 @@ def render_project(
         )
 
     if not project["canonical_landmarks_path"] or not Path(project["canonical_landmarks_path"]).exists():
-        compute_canonical_face(db, config, project_id, progress=progress)
-    align_project(db, config, project_id, mode=render_config.alignment_mode, progress=progress)
+        compute_canonical_face(db, config, project_id, progress=progress, cancel_check=cancel_check)
+    check_cancel()
+    align_project(db, config, project_id, mode=render_config.alignment_mode, progress=progress, cancel_check=cancel_check)
+    check_cancel()
 
     rows = _active_rows(db, project_id)
     if len(rows) < 1:
@@ -104,7 +107,7 @@ def render_project(
 
     if progress:
         progress("ffmpeg", 0, 1, "Assembling video with FFmpeg")
-    _run_ffmpeg(frames_dir, output_path, render_config, frame_index - 1)
+    _run_ffmpeg(frames_dir, output_path, render_config, frame_index - 1, cancel_check=cancel_check)
 
     finished_at = datetime.now().isoformat(sep=" ")
     with db.connect() as conn:
@@ -234,7 +237,13 @@ def _save_frame(frames_dir: Path, index: int, image: Image.Image) -> Path:
     return path
 
 
-def _run_ffmpeg(frames_dir: Path, output_path: Path, render_config: RenderConfig, frame_count: int) -> None:
+def _run_ffmpeg(
+    frames_dir: Path,
+    output_path: Path,
+    render_config: RenderConfig,
+    frame_count: int,
+    cancel_check: CancelCheck | None = None,
+) -> None:
     codec = "libx264" if render_config.codec == "h264" else "libx265"
     duration = frame_count / render_config.fps
     filters = ["format=yuv420p"]
@@ -257,7 +266,28 @@ def _run_ffmpeg(frames_dir: Path, output_path: Path, render_config: RenderConfig
     if render_config.audio_path:
         command.extend(["-shortest", "-c:a", "aac", "-b:a", "192k"])
     command.extend(["-movflags", "+faststart", str(output_path)])
-    subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        while process.poll() is None:
+            if cancel_check:
+                try:
+                    cancel_check()
+                except Exception:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5)
+                    raise
+            time.sleep(0.25)
+        stdout, stderr = process.communicate()
+    except Exception:
+        if process.poll() is None:
+            process.kill()
+        raise
+    if process.returncode != 0:
+        raise subprocess.CalledProcessError(process.returncode, command, output=stdout, stderr=stderr)
 
 
 def _crop_aspect(image: Image.Image, aspect_ratio: str) -> Image.Image:

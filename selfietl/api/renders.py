@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from selfietl.api.deps import get_config, get_db
 from selfietl.config import AppConfig
 from selfietl.db import Database
-from selfietl.jobs.runner import CancellationRequested, runner
+from selfietl.jobs.runner import CancellationRequested, JobsPaused, runner
 from selfietl.jobs.sse import job_event_stream
 from selfietl.models import JobResponse, RenderRequest, RenderResponse, StartJobResponse
 from selfietl.pipeline.compose import create_render_row, mark_render_failed, render_project
@@ -26,6 +26,8 @@ async def render(
 ):
     if db.fetchone("SELECT id FROM projects WHERE id = ?", (project_id,)) is None:
         raise HTTPException(status_code=404, detail="Project not found")
+    if runner.has_active_jobs():
+        raise HTTPException(status_code=409, detail="The app is already working. Cancel or wait for the current step before starting another one.")
     render_id = create_render_row(db, project_id, payload)
 
     def work(progress, cancel_check):
@@ -38,7 +40,11 @@ async def render(
             mark_render_failed(db, render_id, f"{exc.__class__.__name__}: {exc}", status="failed")
             raise
 
-    job = runner.start(f"render:{render_id}", work)
+    try:
+        job = runner.start(f"render:{render_id}", work)
+    except JobsPaused as exc:
+        mark_render_failed(db, render_id, str(exc), status="cancelled")
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return StartJobResponse(job_id=job.id, status_url=f"/api/jobs/{job.id}", events_url=f"/api/jobs/{job.id}/events")
 
 
@@ -59,6 +65,11 @@ def render_file(render_id: int, db: Database = Depends(get_db)):
     if not path.exists():
         raise HTTPException(status_code=404, detail="Render file missing")
     return FileResponse(path, media_type="video/mp4", filename=path.name)
+
+
+@router.get("/jobs", response_model=list[JobResponse])
+def list_jobs():
+    return [JobResponse(**job.public()) for job in runner.list()]
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)

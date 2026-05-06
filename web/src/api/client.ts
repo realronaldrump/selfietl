@@ -49,6 +49,8 @@ export type JobStatus = {
   name: string;
   status: "queued" | "running" | "done" | "failed" | "cancelled";
   progress: number;
+  progress_done: number;
+  progress_total: number;
   stage: string | null;
   message: string | null;
   result: Record<string, unknown> | null;
@@ -144,10 +146,12 @@ export const api = {
   render: (projectId: number, payload: RenderConfig) =>
     fetchJson<JobStart>(`/api/projects/${projectId}/render`, { method: "POST", body: JSON.stringify(payload) }),
   renders: (projectId: number) => fetchJson<Render[]>(`/api/projects/${projectId}/renders`),
+  jobs: () => fetchJson<JobStatus[]>("/api/jobs"),
   cancelJob: (jobId: string) => fetchJson(`/api/jobs/${jobId}`, { method: "DELETE" }),
   defaultSource: () => fetchJson<PathResponse>("/api/system/default-source"),
   inboxStatus: () => fetchJson<InboxStatus>("/api/system/inbox-status"),
   revealFolder: (path?: string | null) =>
     fetchJson<{ ok: boolean; path: string }>("/api/system/reveal", { method: "POST", body: JSON.stringify({ path: path || null }) }),
   pickFolder: () => fetchJson<PathResponse>("/api/system/pick-folder", { method: "POST" }),
+  resetAppData: () => fetchJson<{ ok: boolean; inbox_path: string }>("/api/system/reset", { method: "POST", body: JSON.stringify({ confirm: true }) }),
 };

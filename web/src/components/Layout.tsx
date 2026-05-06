@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   BarChart3,
   Check,
@@ -12,16 +13,17 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import type { Project } from "@/api/client";
-import { Badge, Button, Metric, cn } from "@/components/ui";
+import { api, type JobStatus } from "@/api/client";
+import { Badge, Button, ProgressBar, cn } from "@/components/ui";
 
 export type PageKey = "setup" | "grid" | "outliers" | "stats" | "render" | "history";
 
 const navItems: Array<{ key: PageKey; label: string; icon: typeof FolderOpen }> = [
   { key: "setup", label: "Setup", icon: FolderOpen },
   { key: "grid", label: "Photos", icon: Images },
-  { key: "outliers", label: "Outliers", icon: ScanFace },
-  { key: "stats", label: "Stats", icon: BarChart3 },
-  { key: "render", label: "Render", icon: SlidersHorizontal },
+  { key: "outliers", label: "Review", icon: ScanFace },
+  { key: "stats", label: "Details", icon: BarChart3 },
+  { key: "render", label: "Create video", icon: SlidersHorizontal },
   { key: "history", label: "History", icon: Clock3 },
 ];
 
@@ -40,6 +42,9 @@ export function Layout({
   onProjectChange: (id: number) => void;
   children: React.ReactNode;
 }) {
+  const jobsQuery = useQuery({ queryKey: ["jobs"], queryFn: api.jobs, refetchInterval: 1200 });
+  const currentJob = pickVisibleJob(jobsQuery.data ?? []);
+
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[17rem_1fr]">
       <aside className="bg-ink text-paper lg:min-h-screen">
@@ -89,17 +94,67 @@ export function Layout({
               </div>
               <p className="mt-1 truncate text-sm font-medium text-ink/55">{currentProject?.source_folder ?? "Create a local project to begin"}</p>
             </div>
-            <div className="grid grid-cols-3 gap-2 sm:min-w-[27rem]">
-              <Metric label="Photos" value={currentProject?.photo_count ?? 0} />
-              <Metric label="Active" value={currentProject?.active_count ?? 0} tone="good" />
-              <Metric label="Skipped" value={currentProject?.skipped_count ?? 0} tone={currentProject?.skipped_count ? "warn" : "default"} />
+            <div className="flex flex-wrap gap-2 text-sm font-black">
+              <StatusPill>{currentProject?.photo_count ?? 0} photos</StatusPill>
+              <StatusPill tone="good">{currentProject?.active_count ?? 0} included</StatusPill>
+              <StatusPill tone={currentProject?.skipped_count ? "warn" : "default"}>{currentProject?.skipped_count ?? 0} to review</StatusPill>
             </div>
           </div>
+          <GlobalProgress job={currentJob} />
         </header>
         <div className="px-4 py-5 md:px-6">{children}</div>
       </main>
     </div>
   );
+}
+
+function pickVisibleJob(jobs: JobStatus[]) {
+  return jobs.find((job) => ["queued", "running"].includes(job.status)) ?? jobs.find((job) => ["failed", "cancelled"].includes(job.status)) ?? null;
+}
+
+function GlobalProgress({ job }: { job: JobStatus | null }) {
+  if (!job) return null;
+  const percent = Math.round((job.progress ?? 0) * 100);
+  const title = job.status === "running" || job.status === "queued" ? plainJobName(job.name, job.stage) : job.status === "failed" ? "Something needs attention" : "Stopped";
+  return (
+    <div className="mt-4 rounded-md border border-teal/25 bg-white p-3 shadow-line">
+      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div className="min-w-0">
+          <div className="text-sm font-black text-ink">{title}</div>
+          <div className="mt-1 truncate text-xs font-semibold text-ink/55">{job.message ?? "Working"}</div>
+        </div>
+        <div className="shrink-0 text-sm font-black text-ink">
+          {job.progress_total > 0 ? `${job.progress_done.toLocaleString()} / ${job.progress_total.toLocaleString()}` : `${percent}%`}
+        </div>
+      </div>
+      <div className="mt-3">
+        <ProgressBar value={job.progress ?? 0} />
+      </div>
+    </div>
+  );
+}
+
+function plainJobName(name: string, stage: string | null) {
+  const raw = stage ?? name.split(":")[0];
+  const labels: Record<string, string> = {
+    scan: "Reading your photo folder",
+    detect: "Finding and measuring faces",
+    canonical: "Choosing the steady face anchor",
+    align: "Locking each face into place",
+    render: "Creating the video",
+    render_frames: "Creating video frames",
+    ffmpeg: "Saving the movie file",
+  };
+  return labels[raw] ?? "Working";
+}
+
+function StatusPill({ children, tone = "default" }: { children: React.ReactNode; tone?: "default" | "good" | "warn" }) {
+  const tones = {
+    default: "border-ink/10 bg-white text-ink",
+    good: "border-teal/25 bg-teal/10 text-teal",
+    warn: "border-coral/25 bg-coral/10 text-coral",
+  };
+  return <span className={cn("inline-flex min-h-9 items-center rounded-md border px-3", tones[tone])}>{children}</span>;
 }
 
 function ProjectDropdown({
@@ -220,7 +275,7 @@ export function EmptyProject({ onSetup }: { onSetup: () => void }) {
     <div className="mx-auto mt-16 max-w-xl rounded-lg bg-paper p-6 text-center shadow-line">
       <FolderOpen className="mx-auto h-10 w-10 text-teal" />
       <h2 className="mt-4 text-2xl font-black text-ink">No project selected</h2>
-      <p className="mt-2 text-sm font-medium text-ink/60">Create a project with a source folder before running scan, detection, alignment, and render jobs.</p>
+      <p className="mt-2 text-sm font-medium text-ink/60">Open Setup and drop photos into the inbox. The app will prepare them and then create a video.</p>
       <Button className="mt-5" onClick={onSetup}>
         Open setup
       </Button>

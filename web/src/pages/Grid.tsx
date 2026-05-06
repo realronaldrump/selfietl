@@ -28,8 +28,8 @@ export function Grid({ project }: { project: Project }) {
     <div className="space-y-4">
       <Panel className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <h2 className="text-xl font-black text-ink">Photo grid</h2>
-          <p className="mt-1 text-sm font-medium text-ink/55">Sorted by capture date with cached thumbnails and quality signals.</p>
+          <h2 className="text-xl font-black text-ink">Photos</h2>
+          <p className="mt-1 text-sm font-medium text-ink/55">Sorted by the capture date the app found from EXIF or the AgeLapse filename.</p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="secondary" size="sm" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - limit))}>

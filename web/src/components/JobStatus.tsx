@@ -20,6 +20,11 @@ export function JobStatus({
             <span className="truncate text-sm font-bold text-ink">{job.stage ?? job.name}</span>
           </div>
           <p className="mt-1 text-sm font-medium text-ink/55">{job.message ?? "Queued"}</p>
+          {job.progress_total > 0 ? (
+            <p className="mt-1 text-xs font-black text-ink/45">
+              {job.progress_done.toLocaleString()} of {job.progress_total.toLocaleString()} complete · {Math.round((job.progress ?? 0) * 100)}%
+            </p>
+          ) : null}
         </div>
         {["queued", "running"].includes(job.status) && onCancel ? (
           <Button variant="secondary" size="sm" onClick={onCancel}>

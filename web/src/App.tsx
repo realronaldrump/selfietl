@@ -37,7 +37,7 @@ export default function App() {
 
   const content = (() => {
     if (page === "setup") {
-      return <Setup currentProject={currentProject} onProjectCreated={(id) => setSelectedProjectId(id)} />;
+      return <Setup currentProject={currentProject} onProjectCreated={(id) => setSelectedProjectId(id)} onRender={() => setPage("render")} />;
     }
     if (!currentProject) return <EmptyProject onSetup={() => setPage("setup")} />;
     if (page === "grid") return <Grid project={currentProject} />;

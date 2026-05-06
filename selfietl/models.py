@@ -74,6 +74,8 @@ class JobResponse(BaseModel):
     name: str
     status: Literal["queued", "running", "done", "failed", "cancelled"]
     progress: float = 0
+    progress_done: int = 0
+    progress_total: int = 0
     stage: str | None = None
     message: str | None = None
     result: dict[str, Any] | None = None

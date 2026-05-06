@@ -13,6 +13,30 @@ from selfietl.db import Database
 from selfietl.pipeline.score import compute_quality_score
 
 Progress = Callable[[str, int, int, str], None]
+CancelCheck = Callable[[], None]
+
+STABLE_ALIGNMENT_INDICES = (
+    33,
+    133,
+    263,
+    362,
+    6,
+    8,
+    9,
+    168,
+    195,
+    197,
+    468,
+    469,
+    470,
+    471,
+    472,
+    473,
+    474,
+    475,
+    476,
+    477,
+)
 
 
 def similarity_transform(source: np.ndarray, target: np.ndarray) -> np.ndarray:
@@ -64,11 +88,20 @@ def apply_transform(points: np.ndarray, matrix: np.ndarray) -> np.ndarray:
     return pts @ matrix[:, :2].T + matrix[:, 2]
 
 
+def stable_alignment_points(points: np.ndarray) -> np.ndarray:
+    pts = np.asarray(points, dtype=np.float64)
+    indices = [idx for idx in STABLE_ALIGNMENT_INDICES if idx < len(pts)]
+    if len(indices) >= 3:
+        return pts[indices, :2]
+    return pts[:, :2]
+
+
 def compute_canonical_face(
     db: Database,
     config: AppConfig,
     project_id: int,
     progress: Progress | None = None,
+    cancel_check: CancelCheck | None = None,
 ) -> Path:
     rows = db.fetchall(
         """
@@ -88,6 +121,8 @@ def compute_canonical_face(
     hashes: list[str] = []
     sizes: list[tuple[int, int]] = []
     for row in rows:
+        if cancel_check:
+            cancel_check()
         payload = np.load(row["landmarks_path"])
         landmarks = np.asarray(payload["landmarks"], dtype=np.float64)[:, :2]
         if landmarks.shape[0] < 3:
@@ -103,7 +138,9 @@ def compute_canonical_face(
     for _ in range(4):
         aligned = []
         for shape in shapes:
-            matrix = similarity_transform(shape, reference)
+            if cancel_check:
+                cancel_check()
+            matrix = similarity_transform(stable_alignment_points(shape), stable_alignment_points(reference))
             aligned.append(apply_transform(shape, matrix))
         reference = np.mean(np.stack(aligned), axis=0)
 
@@ -124,7 +161,7 @@ def compute_canonical_face(
     residuals = []
     aligned_shapes = []
     for shape in shapes:
-        matrix = similarity_transform(shape, reference)
+        matrix = similarity_transform(stable_alignment_points(shape), stable_alignment_points(reference))
         aligned = apply_transform(shape, matrix)
         aligned_shapes.append(aligned)
         residuals.append(float(np.sqrt(np.mean(np.sum((aligned - reference) ** 2, axis=1)))))
@@ -136,6 +173,8 @@ def compute_canonical_face(
 
     with db.connect() as conn:
         for idx, row in enumerate(rows):
+            if cancel_check:
+                cancel_check()
             zscore = max(0.0, float(zscores[idx]))
             quality = compute_quality_score(
                 confidence=row["quality_score"] if row["quality_score"] is not None else 1.0,

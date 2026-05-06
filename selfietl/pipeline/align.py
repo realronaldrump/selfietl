@@ -13,10 +13,12 @@ from selfietl.pipeline.canonical import (
     apply_transform,
     canonical_pixels,
     similarity_transform,
+    stable_alignment_points,
 )
 from selfietl.pipeline.images import copy_exif, open_oriented_image
 
 Progress = Callable[[str, int, int, str], None]
+CancelCheck = Callable[[], None]
 
 
 def align_project(
@@ -26,6 +28,7 @@ def align_project(
     mode: str = "similarity",
     progress: Progress | None = None,
     force: bool = False,
+    cancel_check: CancelCheck | None = None,
 ) -> dict:
     project = db.fetchone("SELECT canonical_landmarks_path FROM projects WHERE id = ?", (project_id,))
     if project is None or not project["canonical_landmarks_path"]:
@@ -47,6 +50,8 @@ def align_project(
     skipped = 0
     errors: list[dict] = []
     for idx, row in enumerate(rows):
+        if cancel_check:
+            cancel_check()
         output = aligned_path(config, row["hash"])
         if output.exists() and not force:
             skipped += 1
@@ -95,9 +100,9 @@ def align_photo(
         width, height = image.size
         source_landmarks = normalized * np.array([width, height], dtype=np.float64)
         if mode == "affine":
-            matrix = affine_transform(source_landmarks, target_landmarks)
+            matrix = affine_transform(stable_alignment_points(source_landmarks), stable_alignment_points(target_landmarks))
         else:
-            matrix = similarity_transform(source_landmarks, target_landmarks)
+            matrix = similarity_transform(stable_alignment_points(source_landmarks), stable_alignment_points(target_landmarks))
         aligned = _warp_image(image, matrix, target_size)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

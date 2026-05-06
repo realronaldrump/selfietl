@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -83,23 +84,42 @@ def exif_metadata(path: str | Path) -> dict[str, Any]:
     path = Path(path)
     warnings: list[str] = []
     captured_at: datetime | None = None
+    filename_captured_at = parse_filename_datetime(path.name)
     make = None
     model = None
     try:
         register_heif()
         with Image.open(path) as image:
             exif = image.getexif()
-            raw_date = exif.get(36867) or exif.get(306)
-            if raw_date:
-                captured_at = parse_exif_datetime(str(raw_date))
+            original_date = parse_exif_datetime(str(exif.get(36867))) if exif.get(36867) else None
+            fallback_exif_date = parse_exif_datetime(str(exif.get(306))) if exif.get(306) else None
+            if original_date:
+                captured_at = original_date
+                if filename_captured_at and abs((filename_captured_at - captured_at).total_seconds()) > 3600:
+                    warnings.append("filename_datetime_differs_from_exif")
+            elif filename_captured_at:
+                captured_at = filename_captured_at
+                warnings.append("missing_datetime_original")
+                warnings.append("datetime_from_filename")
+                if fallback_exif_date and abs((fallback_exif_date - filename_captured_at).total_seconds()) > 3600:
+                    warnings.append("exif_datetime_ignored_for_filename")
+            elif fallback_exif_date:
+                captured_at = fallback_exif_date
+                warnings.append("missing_datetime_original")
+                warnings.append("datetime_from_exif_datetime")
             make = _clean_exif_text(exif.get(271))
             model = _clean_exif_text(exif.get(272))
     except Exception as exc:
         warnings.append(f"exif_read_failed:{exc.__class__.__name__}")
 
     if captured_at is None:
-        captured_at = datetime.fromtimestamp(path.stat().st_mtime)
         warnings.append("missing_datetime_original")
+        if filename_captured_at:
+            captured_at = filename_captured_at
+            warnings.append("datetime_from_filename")
+        else:
+            captured_at = datetime.fromtimestamp(path.stat().st_mtime)
+            warnings.append("datetime_from_file_modified_time")
 
     return {
         "captured_at": captured_at,
@@ -114,6 +134,30 @@ def parse_exif_datetime(value: str) -> datetime | None:
         try:
             parsed = datetime.strptime(value, fmt)
             return parsed.replace(tzinfo=None)
+        except ValueError:
+            continue
+    return None
+
+
+def parse_filename_datetime(value: str) -> datetime | None:
+    patterns = (
+        r"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})[_ -](?P<hour>\d{2})-(?P<minute>\d{2})-(?P<second>\d{2})",
+        r"(?P<year>\d{4})(?P<month>\d{2})(?P<day>\d{2})[_ -]?(?P<hour>\d{2})(?P<minute>\d{2})(?P<second>\d{2})",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, value)
+        if not match:
+            continue
+        try:
+            parts = {key: int(raw) for key, raw in match.groupdict().items()}
+            return datetime(
+                parts["year"],
+                parts["month"],
+                parts["day"],
+                parts["hour"],
+                parts["minute"],
+                parts["second"],
+            )
         except ValueError:
             continue
     return None

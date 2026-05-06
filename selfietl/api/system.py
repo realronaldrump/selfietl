@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import platform
+import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ from pydantic import BaseModel
 from selfietl.api.deps import get_config, get_db
 from selfietl.config import AppConfig
 from selfietl.db import Database
+from selfietl.jobs.runner import runner
 from selfietl.pipeline.images import is_supported_image
 
 router = APIRouter(prefix="/system", tags=["system"])
@@ -22,6 +24,10 @@ class PathResponse(BaseModel):
 
 class RevealRequest(BaseModel):
     path: str | None = None
+
+
+class ResetRequest(BaseModel):
+    confirm: bool = False
 
 
 class InboxStatusResponse(BaseModel):
@@ -69,6 +75,21 @@ def pick_folder():
     return PathResponse(path=str(path))
 
 
+@router.post("/reset")
+def reset(payload: ResetRequest, config: AppConfig = Depends(get_config), db: Database = Depends(get_db)):
+    if not payload.confirm:
+        raise HTTPException(status_code=400, detail="Reset requires confirmation")
+    runner.pause_new_jobs()
+    try:
+        runner.cancel_active_jobs()
+        if not runner.wait_for_idle(timeout_seconds=30):
+            raise HTTPException(status_code=409, detail="The current job is still stopping. Try reset again in a moment.")
+        reset_app_data(config, db)
+        return {"ok": True, "inbox_path": str(default_source_folder(config))}
+    finally:
+        runner.resume_new_jobs()
+
+
 def get_inbox_status(config: AppConfig, db: Database) -> InboxStatusResponse:
     path = default_source_folder(config)
     files = [item for item in path.iterdir() if item.is_file()]
@@ -107,6 +128,24 @@ def get_inbox_status(config: AppConfig, db: Database) -> InboxStatusResponse:
         needs_scan=project_id is None or last_scan_ts < latest_mtime,
         needs_detection=cataloged > detected,
     )
+
+
+def reset_app_data(config: AppConfig, db: Database) -> None:
+    with db.connect() as conn:
+        conn.execute("DELETE FROM renders")
+        conn.execute("DELETE FROM project_photos")
+        conn.execute("DELETE FROM photos")
+        conn.execute("DELETE FROM projects")
+        try:
+            conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('projects', 'renders')")
+        except Exception:
+            pass
+
+    for path in [config.data_dir / "cache", config.aligned_dir, config.exports_dir]:
+        if path.exists():
+            shutil.rmtree(path)
+    config.ensure_dirs()
+    default_source_folder(config)
 
 
 def _parse_timestamp(value: str | None) -> datetime:
