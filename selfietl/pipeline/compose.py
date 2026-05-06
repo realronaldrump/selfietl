@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
 from PIL import Image
 
 from selfietl.config import AppConfig, RenderConfig
@@ -62,8 +63,7 @@ def render_project(
         shutil.rmtree(work_dir)
     frames_dir = work_dir / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
-    normalized_dir = work_dir / "normalized"
-    source_paths = _source_frame_paths(config, rows, render_config, normalized_dir)
+    source_assets = _source_assets(config, rows, render_config, work_dir, progress, cancel_check)
 
     frame_index = 1
     total_pairs = max(0, len(rows) - 1)
@@ -71,8 +71,8 @@ def render_project(
     for idx, row in enumerate(rows):
         check_cancel()
         captured_at = _parse_datetime(row["captured_at"])
-        image = Image.open(source_paths[row["hash"]]).convert("RGB")
-        image = prepare_frame(image, render_config, captured_at)
+        image = Image.open(source_assets[row["hash"]]["image"]).convert("RGB")
+        image = draw_date_overlay(image, captured_at, render_config.date_overlay)
         _save_frame(frames_dir, frame_index, image)
         frame_index += 1
         if progress:
@@ -82,24 +82,24 @@ def render_project(
             next_row = rows[idx + 1]
             if render_config.morph_mode == "rife":
                 intermediates = _rife_or_fallback(
-                    source_paths[row["hash"]],
-                    source_paths[next_row["hash"]],
-                    config.aligned_landmarks_dir / f"{row['hash']}.npz",
-                    config.aligned_landmarks_dir / f"{next_row['hash']}.npz",
+                    source_assets[row["hash"]]["image"],
+                    source_assets[next_row["hash"]]["image"],
+                    source_assets[row["hash"]]["landmarks"],
+                    source_assets[next_row["hash"]]["landmarks"],
                     render_config.intermediate_frames,
                     work_dir / "rife" / f"{idx:05d}",
                 )
             else:
                 intermediates = morph_pair(
-                    source_paths[row["hash"]],
-                    source_paths[next_row["hash"]],
-                    config.aligned_landmarks_dir / f"{row['hash']}.npz",
-                    config.aligned_landmarks_dir / f"{next_row['hash']}.npz",
+                    source_assets[row["hash"]]["image"],
+                    source_assets[next_row["hash"]]["image"],
+                    source_assets[row["hash"]]["landmarks"],
+                    source_assets[next_row["hash"]]["landmarks"],
                     render_config.intermediate_frames,
                 )
             for intermediate in intermediates:
                 check_cancel()
-                frame = prepare_frame(intermediate.convert("RGB"), render_config, captured_at)
+                frame = draw_date_overlay(intermediate.convert("RGB"), captured_at, render_config.date_overlay)
                 _save_frame(frames_dir, frame_index, frame)
                 frame_index += 1
                 if progress:
@@ -176,10 +176,14 @@ def quick_preview(db: Database, config: AppConfig, project_id: int) -> Path:
 
 
 def prepare_frame(image: Image.Image, render_config: RenderConfig, captured_at: datetime) -> Image.Image:
+    image = prepare_base_frame(image, render_config)
+    return draw_date_overlay(image, captured_at, render_config.date_overlay)
+
+
+def prepare_base_frame(image: Image.Image, render_config: RenderConfig) -> Image.Image:
     image = _crop_aspect(image, render_config.aspect_ratio)
     image = _resize_for_preset(image, render_config.resolution)
-    image = _ensure_even_dimensions(image)
-    return draw_date_overlay(image, captured_at, render_config.date_overlay)
+    return _ensure_even_dimensions(image)
 
 
 def _active_rows(db: Database, project_id: int) -> list:
@@ -195,22 +199,77 @@ def _active_rows(db: Database, project_id: int) -> list:
     )
 
 
-def _source_frame_paths(config: AppConfig, rows: list, render_config: RenderConfig, normalized_dir: Path) -> dict[str, Path]:
+def _source_assets(
+    config: AppConfig,
+    rows: list,
+    render_config: RenderConfig,
+    work_dir: Path,
+    progress: Progress | None,
+    cancel_check: CancelCheck | None,
+) -> dict[str, dict[str, Path]]:
+    def check_cancel() -> None:
+        if cancel_check:
+            cancel_check()
+
     paths = {row["hash"]: aligned_path(config, row["hash"]) for row in rows}
-    if not render_config.color_normalize or len(rows) < 2:
-        return paths
+    landmarks = {row["hash"]: config.aligned_landmarks_dir / f"{row['hash']}.npz" for row in rows}
+
+    normalized_dir = work_dir / "normalized"
+    prepared_dir = work_dir / "prepared"
     reference = max(rows, key=lambda row: row["quality_score"] or 0)
     reference_path = paths[reference["hash"]]
-    normalized_dir.mkdir(parents=True, exist_ok=True)
-    for row in rows:
-        source = paths[row["hash"]]
-        output = normalized_dir / f"{row['hash']}.jpg"
-        if source == reference_path:
-            shutil.copyfile(source, output)
-        else:
-            normalize_to_reference(source, reference_path, output)
-        paths[row["hash"]] = output
-    return paths
+    if render_config.color_normalize and len(rows) >= 2:
+        normalized_dir.mkdir(parents=True, exist_ok=True)
+        for idx, row in enumerate(rows, start=1):
+            check_cancel()
+            source = paths[row["hash"]]
+            output = normalized_dir / f"{row['hash']}.jpg"
+            if source == reference_path:
+                shutil.copyfile(source, output)
+            else:
+                normalize_to_reference(source, reference_path, output)
+            paths[row["hash"]] = output
+            if progress:
+                progress("prepare_video", idx, len(rows), "Matching color")
+
+    needs_prepared = render_config.resolution != "original" or render_config.aspect_ratio != "original"
+    if not needs_prepared:
+        return {row["hash"]: {"image": paths[row["hash"]], "landmarks": landmarks[row["hash"]]} for row in rows}
+
+    prepared_dir.mkdir(parents=True, exist_ok=True)
+    for idx, row in enumerate(rows, start=1):
+        check_cancel()
+        source_path = paths[row["hash"]]
+        landmarks_path = landmarks[row["hash"]]
+        output_image = prepared_dir / f"{row['hash']}.jpg"
+        output_landmarks = prepared_dir / f"{row['hash']}.npz"
+        with Image.open(source_path) as image:
+            payload = np.load(landmarks_path)
+            source_landmarks = np.asarray(payload["landmarks"], dtype=np.float64)
+            prepared, prepared_landmarks = _prepare_image_and_landmarks(image.convert("RGB"), source_landmarks, render_config)
+            prepared.save(output_image, "JPEG", quality=95, optimize=True)
+            np.savez_compressed(
+                output_landmarks,
+                landmarks=prepared_landmarks.astype(np.float32),
+                target_size=np.array(prepared.size, dtype=np.int32),
+            )
+        paths[row["hash"]] = output_image
+        landmarks[row["hash"]] = output_landmarks
+        if progress:
+            progress("prepare_video", idx, len(rows), "Preparing fast video frames")
+
+    return {row["hash"]: {"image": paths[row["hash"]], "landmarks": landmarks[row["hash"]]} for row in rows}
+
+
+def _prepare_image_and_landmarks(
+    image: Image.Image,
+    landmarks: np.ndarray,
+    render_config: RenderConfig,
+) -> tuple[Image.Image, np.ndarray]:
+    image, landmarks = _crop_aspect_with_landmarks(image, landmarks, render_config.aspect_ratio)
+    image, landmarks = _resize_with_landmarks(image, landmarks, render_config.resolution)
+    image, landmarks = _ensure_even_with_landmarks(image, landmarks)
+    return image, landmarks
 
 
 def _rife_or_fallback(
@@ -308,6 +367,31 @@ def _crop_aspect(image: Image.Image, aspect_ratio: str) -> Image.Image:
     return image.crop((0, top, width, top + new_height))
 
 
+def _crop_aspect_with_landmarks(
+    image: Image.Image,
+    landmarks: np.ndarray,
+    aspect_ratio: str,
+) -> tuple[Image.Image, np.ndarray]:
+    ratios = {"square": 1.0, "9:16": 9 / 16, "16:9": 16 / 9}
+    target = ratios.get(aspect_ratio)
+    if target is None:
+        return image, landmarks
+    width, height = image.size
+    current = width / height
+    if abs(current - target) < 0.001:
+        return image, landmarks
+    shifted = np.asarray(landmarks, dtype=np.float64).copy()
+    if current > target:
+        new_width = int(height * target)
+        left = (width - new_width) // 2
+        shifted[:, 0] -= left
+        return image.crop((left, 0, left + new_width, height)), shifted
+    new_height = int(width / target)
+    top = (height - new_height) // 2
+    shifted[:, 1] -= top
+    return image.crop((0, top, width, top + new_height)), shifted
+
+
 def _resize_for_preset(image: Image.Image, resolution: str) -> Image.Image:
     sizes = {
         "1080_square": (1080, 1080),
@@ -320,12 +404,41 @@ def _resize_for_preset(image: Image.Image, resolution: str) -> Image.Image:
     return image.resize(size, Image.Resampling.LANCZOS)
 
 
+def _resize_with_landmarks(
+    image: Image.Image,
+    landmarks: np.ndarray,
+    resolution: str,
+) -> tuple[Image.Image, np.ndarray]:
+    sizes = {
+        "1080_square": (1080, 1080),
+        "1080_vertical": (1080, 1920),
+        "4k_landscape": (3840, 2160),
+    }
+    size = sizes.get(resolution)
+    if size is None:
+        return image, landmarks
+    width, height = image.size
+    scale = np.array([size[0] / width, size[1] / height], dtype=np.float64)
+    resized = image.resize(size, Image.Resampling.LANCZOS)
+    scaled = np.asarray(landmarks, dtype=np.float64).copy()
+    scaled[:, :2] *= scale
+    return resized, scaled
+
+
 def _ensure_even_dimensions(image: Image.Image) -> Image.Image:
     width, height = image.size
     even = (width - width % 2, height - height % 2)
     if even == image.size:
         return image
     return image.crop((0, 0, even[0], even[1]))
+
+
+def _ensure_even_with_landmarks(image: Image.Image, landmarks: np.ndarray) -> tuple[Image.Image, np.ndarray]:
+    width, height = image.size
+    even = (width - width % 2, height - height % 2)
+    if even == image.size:
+        return image, landmarks
+    return image.crop((0, 0, even[0], even[1])), landmarks
 
 
 def _parse_datetime(value) -> datetime:

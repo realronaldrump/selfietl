@@ -9,11 +9,11 @@ import { useJobEvents } from "@/hooks/useJobEvents";
 const defaultConfig: RenderConfig = {
   alignment_mode: "similarity",
   morph_mode: "landmark_delaunay",
-  intermediate_frames: 8,
+  intermediate_frames: 4,
   color_normalize: false,
   fps: 30,
-  resolution: "original",
-  aspect_ratio: "original",
+  resolution: "1080_vertical",
+  aspect_ratio: "9:16",
   date_overlay: {
     enabled: true,
     format: "%b %Y",
@@ -56,6 +56,39 @@ export function Render({ project }: { project: Project }) {
     onError: (err) => setError(err instanceof Error ? err.message : String(err)),
   });
 
+  function applyPreset(preset: "fast" | "full" | "test") {
+    if (preset === "full") {
+      setConfig({
+        ...config,
+        resolution: "original",
+        aspect_ratio: "original",
+        intermediate_frames: 8,
+        morph_mode: "landmark_delaunay",
+        crf: 18,
+      });
+      return;
+    }
+    if (preset === "test") {
+      setConfig({
+        ...config,
+        resolution: "1080_vertical",
+        aspect_ratio: "9:16",
+        intermediate_frames: 0,
+        morph_mode: "none",
+        crf: 24,
+      });
+      return;
+    }
+    setConfig({
+      ...config,
+      resolution: "1080_vertical",
+      aspect_ratio: "9:16",
+      intermediate_frames: 4,
+      morph_mode: "landmark_delaunay",
+      crf: 20,
+    });
+  }
+
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_24rem]">
       <Panel>
@@ -69,7 +102,7 @@ export function Render({ project }: { project: Project }) {
             <div>
               <div className="text-sm font-black text-ink">One-click MP4</div>
               <p className="mt-1 max-w-2xl text-sm font-semibold leading-6 text-ink/60">
-                Smooth face-locked timelapse, original resolution, H.264 video, date label included.
+                Recommended: fast 1080p vertical video with smooth face movement. Full quality is available, but it can take much longer.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -88,8 +121,28 @@ export function Render({ project }: { project: Project }) {
           <div className="mt-4 grid gap-2 md:grid-cols-4">
             <Summary label="Motion" value={config.morph_mode === "none" ? "Cuts only" : `${config.intermediate_frames} morph frames`} />
             <Summary label="Speed" value={`${config.fps} fps`} />
-            <Summary label="Size" value={config.resolution === "original" ? "Original" : config.resolution.replace("_", " ")} />
+            <Summary label="Size" value={videoSizeLabel(config.resolution)} />
             <Summary label="Format" value={config.codec.toUpperCase()} />
+          </div>
+          <div className="mt-4 grid gap-2 md:grid-cols-3">
+            <PresetButton
+              active={config.resolution === "1080_vertical" && config.aspect_ratio === "9:16" && config.morph_mode !== "none"}
+              title="Fast 1080p"
+              body="Recommended. Smooth vertical MP4 without full-resolution morph cost."
+              onClick={() => applyPreset("fast")}
+            />
+            <PresetButton
+              active={config.resolution === "original" && config.aspect_ratio === "original"}
+              title="Full quality"
+              body="Original-size output. Use when you are okay waiting much longer."
+              onClick={() => applyPreset("full")}
+            />
+            <PresetButton
+              active={config.morph_mode === "none"}
+              title="Quick test"
+              body="No morphing. Useful for checking dates and framing first."
+              onClick={() => applyPreset("test")}
+            />
           </div>
         </div>
 
@@ -127,10 +180,10 @@ export function Render({ project }: { project: Project }) {
               </Field>
               <Field label="Video size" help="Original keeps the aligned photo size. Smaller presets export faster.">
                 <Select value={config.resolution} onChange={(event) => setConfig({ ...config, resolution: event.target.value as RenderConfig["resolution"] })}>
-                  <option value="original">Original</option>
-                  <option value="1080_square">1080 square</option>
-                  <option value="1080_vertical">1080 vertical</option>
-                  <option value="4k_landscape">4K landscape</option>
+                  <option value="1080_vertical">Fast 1080p vertical</option>
+                  <option value="1080_square">Fast 1080p square</option>
+                  <option value="original">Full quality original size</option>
+                  <option value="4k_landscape">Large 4K landscape</option>
                 </Select>
               </Field>
               <Field label="Shape" help="Original keeps your photo shape. Square and vertical are social-friendly crops.">
@@ -213,6 +266,32 @@ export function Render({ project }: { project: Project }) {
   );
 }
 
+function PresetButton({
+  active,
+  title,
+  body,
+  onClick,
+}: {
+  active: boolean;
+  title: string;
+  body: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "min-h-24 rounded-md border p-3 text-left transition",
+        active ? "border-teal bg-white shadow-line" : "border-ink/10 bg-paper hover:border-teal/40",
+      )}
+    >
+      <div className="text-sm font-black text-ink">{title}</div>
+      <div className="mt-1 text-xs font-semibold leading-5 text-ink/55">{body}</div>
+    </button>
+  );
+}
+
 function Summary({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md bg-white p-3 shadow-line">
@@ -220,6 +299,16 @@ function Summary({ label, value }: { label: string; value: string }) {
       <div className="mt-1 truncate text-sm font-black text-ink">{value}</div>
     </div>
   );
+}
+
+function videoSizeLabel(value: RenderConfig["resolution"]) {
+  const labels = {
+    original: "Full quality",
+    "1080_square": "1080p square",
+    "1080_vertical": "1080p vertical",
+    "4k_landscape": "4K landscape",
+  };
+  return labels[value];
 }
 
 function Field({ label, help, children }: { label: string; help?: string; children: React.ReactNode }) {
