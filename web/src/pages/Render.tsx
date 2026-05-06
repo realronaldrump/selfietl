@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Clapperboard, Film, Play, SlidersHorizontal, XCircle } from "lucide-react";
+import { ChevronDown, Clapperboard, Eye, Film, Play, SlidersHorizontal, XCircle } from "lucide-react";
 import { api, type JobStatus, type Project, type RenderConfig } from "@/api/client";
 import { JobStatus as JobStatusPanel } from "@/components/JobStatus";
 import { Button, Input, Label, Panel, Select, cn } from "@/components/ui";
@@ -10,6 +10,8 @@ const defaultConfig: RenderConfig = {
   alignment_mode: "similarity",
   morph_mode: "landmark_delaunay",
   intermediate_frames: 4,
+  start_date: null,
+  end_date: null,
   color_normalize: false,
   fps: 30,
   resolution: "1080_vertical",
@@ -37,7 +39,16 @@ export function Render({ project }: { project: Project }) {
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const historyQuery = useQuery({ queryKey: ["renders", project.id], queryFn: () => api.renders(project.id) });
+  const jobsQuery = useQuery({ queryKey: ["jobs"], queryFn: api.jobs, refetchInterval: 1200 });
+  const statsQuery = useQuery({ queryKey: ["stats", project.id], queryFn: () => api.stats(project.id) as Promise<RenderStats> });
   const latestDone = useMemo(() => historyQuery.data?.find((render) => render.status === "done"), [historyQuery.data]);
+  const activeDates = useMemo(
+    () => (statsQuery.data?.timeline ?? []).filter((item) => !item.skipped).map((item) => item.date),
+    [statsQuery.data],
+  );
+  const firstDate = activeDates[0]?.slice(0, 10) ?? "";
+  const lastDate = activeDates[activeDates.length - 1]?.slice(0, 10) ?? "";
+  const selectedPhotoCount = useMemo(() => countDatesInRange(activeDates, config.start_date, config.end_date), [activeDates, config.end_date, config.start_date]);
   const onTerminal = useCallback(
     (_job: JobStatus) => {
       queryClient.invalidateQueries({ queryKey: ["renders", project.id] });
@@ -46,15 +57,33 @@ export function Render({ project }: { project: Project }) {
     [project.id, queryClient],
   );
   const job = useJobEvents(jobId, onTerminal);
-  const activeJob = Boolean(job && ["queued", "running"].includes(job.status));
+  const visibleJob = job ?? jobsQuery.data?.find((item) => ["queued", "running"].includes(item.status)) ?? null;
+  const activeJob = Boolean(visibleJob && ["queued", "running"].includes(visibleJob.status));
   const renderMutation = useMutation({
-    mutationFn: () => api.render(project.id, config),
+    mutationFn: (payload: RenderConfig) => api.render(project.id, payload),
     onSuccess: (started) => {
       setError(null);
       setJobId(started.job_id);
     },
     onError: (err) => setError(err instanceof Error ? err.message : String(err)),
   });
+
+  function previewConfig(): RenderConfig {
+    return {
+      ...config,
+      morph_mode: "none",
+      intermediate_frames: 0,
+      fps: 15,
+      crf: 24,
+    };
+  }
+
+  function useFirstSample() {
+    if (!activeDates.length) return;
+    const start = activeDates[0].slice(0, 10);
+    const end = activeDates[Math.min(activeDates.length - 1, 9)].slice(0, 10);
+    setConfig({ ...config, start_date: start, end_date: end });
+  }
 
   function applyPreset(preset: "fast" | "full" | "test") {
     if (preset === "full") {
@@ -106,23 +135,32 @@ export function Render({ project }: { project: Project }) {
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              {activeJob && jobId ? (
-                <Button type="button" variant="danger" onClick={() => api.cancelJob(jobId)}>
+              {activeJob && visibleJob ? (
+                <Button type="button" variant="danger" onClick={() => visibleJob && api.cancelJob(visibleJob.id)}>
                   <XCircle className="h-4 w-4" />
                   Cancel
                 </Button>
               ) : null}
-              <Button disabled={renderMutation.isPending || activeJob || project.active_count === 0} onClick={() => renderMutation.mutate()}>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={renderMutation.isPending || activeJob || selectedPhotoCount === 0}
+                onClick={() => renderMutation.mutate(previewConfig())}
+              >
+                <Eye className="h-4 w-4" />
+                Preview range
+              </Button>
+              <Button disabled={renderMutation.isPending || activeJob || selectedPhotoCount === 0} onClick={() => renderMutation.mutate(config)}>
                 <Play className="h-4 w-4" />
                 Create video
               </Button>
             </div>
           </div>
           <div className="mt-4 grid gap-2 md:grid-cols-4">
-            <Summary label="Motion" value={config.morph_mode === "none" ? "Cuts only" : `${config.intermediate_frames} morph frames`} />
+            <Summary label="Motion" value={motionLabel(config)} />
             <Summary label="Speed" value={`${config.fps} fps`} />
             <Summary label="Size" value={videoSizeLabel(config.resolution)} />
-            <Summary label="Format" value={config.codec.toUpperCase()} />
+            <Summary label="Range" value={rangeSummary(selectedPhotoCount, config.start_date, config.end_date)} />
           </div>
           <div className="mt-4 grid gap-2 md:grid-cols-3">
             <PresetButton
@@ -143,6 +181,47 @@ export function Render({ project }: { project: Project }) {
               body="No morphing. Useful for checking dates and framing first."
               onClick={() => applyPreset("test")}
             />
+          </div>
+          <div className="mt-4 rounded-md bg-white p-3 shadow-line">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+              <div className="min-w-0">
+                <div className="text-sm font-black text-ink">Test a smaller date range</div>
+                <p className="mt-1 text-xs font-semibold leading-5 text-ink/55">
+                  Pick a slice, preview it quickly, then clear the range for the full timeline.
+                </p>
+              </div>
+              <div className="grid gap-2 md:grid-cols-[10rem_10rem_auto_auto]">
+                <div>
+                  <Label>From</Label>
+                  <Input
+                    type="date"
+                    min={firstDate || undefined}
+                    max={lastDate || undefined}
+                    value={config.start_date ?? ""}
+                    onChange={(event) => setConfig({ ...config, start_date: event.target.value || null })}
+                  />
+                </div>
+                <div>
+                  <Label>To</Label>
+                  <Input
+                    type="date"
+                    min={firstDate || undefined}
+                    max={lastDate || undefined}
+                    value={config.end_date ?? ""}
+                    onChange={(event) => setConfig({ ...config, end_date: event.target.value || null })}
+                  />
+                </div>
+                <Button type="button" variant="secondary" className="self-end" disabled={!activeDates.length} onClick={useFirstSample}>
+                  First 10
+                </Button>
+                <Button type="button" variant="ghost" className="self-end" onClick={() => setConfig({ ...config, start_date: null, end_date: null })}>
+                  Clear
+                </Button>
+              </div>
+            </div>
+            <div className="mt-3 text-xs font-black text-ink/55">
+              {selectedPhotoCount.toLocaleString()} of {activeDates.length.toLocaleString()} included photos selected
+            </div>
           </div>
         </div>
 
@@ -172,11 +251,22 @@ export function Render({ project }: { project: Project }) {
                   <option value="none">No morph</option>
                 </Select>
               </Field>
-              <Field label="Smoothness" help="More frames makes transitions softer and slower.">
-                <Input type="number" min={0} max={60} value={config.intermediate_frames} onChange={(event) => setConfig({ ...config, intermediate_frames: Number(event.target.value) })} />
+              <Field label="Smoothness" help="Higher smoothness looks softer, but takes longer to create.">
+                <Select value={String(config.intermediate_frames)} onChange={(event) => setConfig({ ...config, intermediate_frames: Number(event.target.value) })}>
+                  <option value="0">Preview cuts only</option>
+                  <option value="2">Subtle movement</option>
+                  <option value="4">Smooth recommended</option>
+                  <option value="8">Silky slow</option>
+                  <option value="12">Ultra smooth</option>
+                </Select>
               </Field>
-              <Field label="Video speed" help="30 fps is the normal video default.">
-                <Input type="number" min={1} max={120} value={config.fps} onChange={(event) => setConfig({ ...config, fps: Number(event.target.value) })} />
+              <Field label="Video speed" help="30 fps is the normal choice. 60 fps looks smoother and creates a larger file.">
+                <Select value={String(config.fps)} onChange={(event) => setConfig({ ...config, fps: Number(event.target.value) })}>
+                  <option value="15">15 fps preview</option>
+                  <option value="24">24 fps cinematic</option>
+                  <option value="30">30 fps standard</option>
+                  <option value="60">60 fps extra smooth</option>
+                </Select>
               </Field>
               <Field label="Video size" help="Original keeps the aligned photo size. Smaller presets export faster.">
                 <Select value={config.resolution} onChange={(event) => setConfig({ ...config, resolution: event.target.value as RenderConfig["resolution"] })}>
@@ -200,11 +290,22 @@ export function Render({ project }: { project: Project }) {
                   <option value="h265">H.265</option>
                 </Select>
               </Field>
-              <Field label="Quality" help="Lower means sharper and larger. 18 is high quality.">
-                <Input type="number" min={0} max={51} value={config.crf} onChange={(event) => setConfig({ ...config, crf: Number(event.target.value) })} />
+              <Field label="Quality" help="Higher quality creates a larger file. Balanced is usually enough for previews.">
+                <Select value={String(config.crf)} onChange={(event) => setConfig({ ...config, crf: Number(event.target.value) })}>
+                  <option value="24">Preview smaller file</option>
+                  <option value="20">Balanced</option>
+                  <option value="18">High quality</option>
+                  <option value="14">Very high quality</option>
+                </Select>
               </Field>
-              <Field label="Date format" help="%b %Y becomes labels like May 2026.">
-                <Input value={config.date_overlay.format} onChange={(event) => setConfig({ ...config, date_overlay: { ...config.date_overlay, format: event.target.value } })} />
+              <Field label="Date label" help="Choose how the date appears on the video.">
+                <Select value={config.date_overlay.format} onChange={(event) => setConfig({ ...config, date_overlay: { ...config.date_overlay, format: event.target.value } })}>
+                  <option value="%b %Y">May 2026</option>
+                  <option value="%B %Y">May 2026, full month</option>
+                  <option value="%Y">2026 only</option>
+                  <option value="%b %d, %Y">May 05, 2026</option>
+                  <option value="%Y-%m-%d">2026-05-05</option>
+                </Select>
               </Field>
               <Field label="Overlay position" help="Where the date appears on the video.">
                 <Select value={config.date_overlay.position} onChange={(event) => setConfig({ ...config, date_overlay: { ...config.date_overlay, position: event.target.value as RenderConfig["date_overlay"]["position"] } })}>
@@ -260,7 +361,7 @@ export function Render({ project }: { project: Project }) {
       </Panel>
 
       <div className="xl:col-span-2">
-        <JobStatusPanel job={job} onCancel={jobId ? () => api.cancelJob(jobId) : undefined} />
+        <JobStatusPanel job={visibleJob} onCancel={visibleJob ? () => api.cancelJob(visibleJob.id) : undefined} />
       </div>
     </div>
   );
@@ -309,6 +410,34 @@ function videoSizeLabel(value: RenderConfig["resolution"]) {
     "4k_landscape": "4K landscape",
   };
   return labels[value];
+}
+
+function motionLabel(config: RenderConfig) {
+  if (config.morph_mode === "none" || config.intermediate_frames === 0) return "Cuts only";
+  if (config.intermediate_frames <= 2) return "Subtle movement";
+  if (config.intermediate_frames <= 4) return "Smooth";
+  if (config.intermediate_frames <= 8) return "Silky";
+  return "Ultra smooth";
+}
+
+type RenderStats = {
+  timeline: Array<{ date: string; skipped: boolean }>;
+};
+
+function countDatesInRange(dates: string[], startDate?: string | null, endDate?: string | null) {
+  if (!startDate && !endDate) return dates.length;
+  return dates.filter((date) => {
+    const day = date.slice(0, 10);
+    if (startDate && day < startDate) return false;
+    if (endDate && day > endDate) return false;
+    return true;
+  }).length;
+}
+
+function rangeSummary(count: number, startDate?: string | null, endDate?: string | null) {
+  if (!startDate && !endDate) return `${count.toLocaleString()} photos`;
+  const label = startDate && endDate ? `${startDate} to ${endDate}` : startDate ? `from ${startDate}` : `to ${endDate}`;
+  return `${count.toLocaleString()} photos, ${label}`;
 }
 
 function Field({ label, help, children }: { label: string; help?: string; children: React.ReactNode }) {

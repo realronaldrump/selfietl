@@ -4,7 +4,7 @@ import json
 import shutil
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, time as datetime_time
 from pathlib import Path
 from typing import Callable
 
@@ -52,9 +52,11 @@ def render_project(
     align_project(db, config, project_id, mode=render_config.alignment_mode, progress=progress, cancel_check=cancel_check)
     check_cancel()
 
-    rows = _active_rows(db, project_id)
+    rows = _active_rows(db, project_id, render_config)
     if len(rows) < 1:
-        raise RuntimeError("No active aligned photos are available to render")
+        if render_config.start_date or render_config.end_date:
+            raise RuntimeError("No included photos match this date range")
+        raise RuntimeError("No included photos are available to create a video")
 
     output_path = Path(render_config.output_path).expanduser() if render_config.output_path else _default_output_path(config)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -63,7 +65,8 @@ def render_project(
         shutil.rmtree(work_dir)
     frames_dir = work_dir / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
-    source_assets = _source_assets(config, rows, render_config, work_dir, progress, cancel_check)
+    needs_morph_assets = render_config.intermediate_frames > 0 and render_config.morph_mode != "none"
+    source_assets = _source_assets(config, rows, render_config, work_dir, progress, cancel_check) if needs_morph_assets or render_config.color_normalize else None
 
     frame_index = 1
     total_pairs = max(0, len(rows) - 1)
@@ -71,8 +74,12 @@ def render_project(
     for idx, row in enumerate(rows):
         check_cancel()
         captured_at = _parse_datetime(row["captured_at"])
-        with Image.open(source_assets[row["hash"]]["image"]) as source_image:
-            image = draw_date_overlay(source_image.convert("RGB"), captured_at, render_config.date_overlay)
+        if source_assets:
+            with Image.open(source_assets[row["hash"]]["image"]) as source_image:
+                image = draw_date_overlay(source_image.convert("RGB"), captured_at, render_config.date_overlay)
+        else:
+            with Image.open(aligned_path(config, row["hash"])) as source_image:
+                image = prepare_frame(source_image.convert("RGB"), render_config, captured_at)
         _save_frame(frames_dir, frame_index, image)
         frame_index += 1
         if progress:
@@ -188,8 +195,8 @@ def prepare_base_frame(image: Image.Image, render_config: RenderConfig) -> Image
     return _ensure_even_dimensions(image)
 
 
-def _active_rows(db: Database, project_id: int) -> list:
-    return db.fetchall(
+def _active_rows(db: Database, project_id: int, render_config: RenderConfig | None = None) -> list:
+    rows = db.fetchall(
         """
         SELECT p.hash, p.path, p.captured_at, p.quality_score
         FROM photos p
@@ -199,6 +206,28 @@ def _active_rows(db: Database, project_id: int) -> list:
         """,
         (project_id,),
     )
+    if render_config is None:
+        return rows
+    return _filter_rows_by_date(rows, render_config.start_date, render_config.end_date)
+
+
+def _filter_rows_by_date(rows: list, start_date: str | None, end_date: str | None) -> list:
+    start = _parse_date_boundary(start_date, is_end=False)
+    end = _parse_date_boundary(end_date, is_end=True)
+    if start and end and start > end:
+        raise RuntimeError("Start date must be before end date")
+    if not start and not end:
+        return rows
+
+    filtered = []
+    for row in rows:
+        captured = _parse_datetime(row["captured_at"])
+        if start and captured < start:
+            continue
+        if end and captured > end:
+            continue
+        filtered.append(row)
+    return filtered
 
 
 def _source_assets(
@@ -458,6 +487,18 @@ def _parse_datetime(value) -> datetime:
         except ValueError:
             continue
     return datetime.fromisoformat(text)
+
+
+def _parse_date_boundary(value: str | None, is_end: bool) -> datetime | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) == 10:
+        day = datetime.strptime(text, "%Y-%m-%d").date()
+        return datetime.combine(day, datetime_time.max if is_end else datetime_time.min)
+    return _parse_datetime(text)
 
 
 def _default_output_path(config: AppConfig) -> Path:

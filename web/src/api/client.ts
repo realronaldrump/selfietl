@@ -72,6 +72,8 @@ export type RenderConfig = {
   alignment_mode: "similarity" | "affine";
   morph_mode: "landmark_delaunay" | "rife" | "none";
   intermediate_frames: number;
+  start_date?: string | null;
+  end_date?: string | null;
   color_normalize: boolean;
   fps: number;
   resolution: "original" | "1080_square" | "1080_vertical" | "4k_landscape";

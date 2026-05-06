@@ -56,6 +56,8 @@ class RenderConfig(BaseModel):
     alignment_mode: Literal["similarity", "affine"] = "similarity"
     morph_mode: Literal["landmark_delaunay", "rife", "none"] = "landmark_delaunay"
     intermediate_frames: int = Field(default=8, ge=0, le=60)
+    start_date: str | None = None
+    end_date: str | None = None
     color_normalize: bool = False
     fps: int = Field(default=30, ge=1, le=120)
     resolution: Literal["original", "1080_square", "1080_vertical", "4k_landscape"] = "original"

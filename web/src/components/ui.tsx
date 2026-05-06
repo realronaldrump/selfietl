@@ -64,7 +64,7 @@ export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
     <select
       {...props}
       className={cn(
-        "min-h-11 w-full rounded-md border border-ink/15 bg-white px-3 text-sm text-ink outline-none transition focus:border-teal focus:ring-2 focus:ring-teal/20",
+        "min-h-11 w-full cursor-pointer rounded-md border border-ink/15 bg-paper px-3 text-sm font-semibold text-ink shadow-line outline-none transition hover:border-teal/45 focus:border-teal focus:bg-white focus:ring-2 focus:ring-teal/20",
         props.className,
       )}
     />
