@@ -78,10 +78,21 @@ export function Render({ project }: { project: Project }) {
     };
   }
 
-  function useFirstSample() {
+  function applyRangePreset(preset: RangePreset) {
     if (!activeDates.length) return;
-    const start = activeDates[0].slice(0, 10);
-    const end = activeDates[Math.min(activeDates.length - 1, 9)].slice(0, 10);
+    const lastIndex = activeDates.length - 1;
+    const dateAt = (index: number) => activeDates[Math.max(0, Math.min(lastIndex, index))].slice(0, 10);
+
+    const ranges: Record<RangePreset, [string, string]> = {
+      first10: [dateAt(0), dateAt(9)],
+      latest10: [dateAt(lastIndex - 9), dateAt(lastIndex)],
+      first30: [dateAt(0), dateAt(29)],
+      latest30: [dateAt(lastIndex - 29), dateAt(lastIndex)],
+      middle10: [dateAt(Math.floor(lastIndex / 2) - 4), dateAt(Math.floor(lastIndex / 2) + 5)],
+      firstMonth: [dateAt(0), addDays(dateAt(0), 30)],
+      latestMonth: [addDays(dateAt(lastIndex), -30), dateAt(lastIndex)],
+    };
+    const [start, end] = ranges[preset];
     setConfig({ ...config, start_date: start, end_date: end });
   }
 
@@ -190,7 +201,7 @@ export function Render({ project }: { project: Project }) {
                   Pick a slice, preview it quickly, then clear the range for the full timeline.
                 </p>
               </div>
-              <div className="grid gap-2 md:grid-cols-[10rem_10rem_auto_auto]">
+              <div className="grid gap-2 md:grid-cols-[10rem_10rem_auto]">
                 <div>
                   <Label>From</Label>
                   <Input
@@ -211,13 +222,19 @@ export function Render({ project }: { project: Project }) {
                     onChange={(event) => setConfig({ ...config, end_date: event.target.value || null })}
                   />
                 </div>
-                <Button type="button" variant="secondary" className="self-end" disabled={!activeDates.length} onClick={useFirstSample}>
-                  First 10
-                </Button>
                 <Button type="button" variant="ghost" className="self-end" onClick={() => setConfig({ ...config, start_date: null, end_date: null })}>
                   Clear
                 </Button>
               </div>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <RangePresetButton label="First 10" disabled={!activeDates.length} onClick={() => applyRangePreset("first10")} />
+              <RangePresetButton label="Latest 10" disabled={!activeDates.length} onClick={() => applyRangePreset("latest10")} />
+              <RangePresetButton label="Middle 10" disabled={!activeDates.length} onClick={() => applyRangePreset("middle10")} />
+              <RangePresetButton label="First 30" disabled={!activeDates.length} onClick={() => applyRangePreset("first30")} />
+              <RangePresetButton label="Latest 30" disabled={!activeDates.length} onClick={() => applyRangePreset("latest30")} />
+              <RangePresetButton label="First month" disabled={!activeDates.length} onClick={() => applyRangePreset("firstMonth")} />
+              <RangePresetButton label="Latest month" disabled={!activeDates.length} onClick={() => applyRangePreset("latestMonth")} />
             </div>
             <div className="mt-3 text-xs font-black text-ink/55">
               {selectedPhotoCount.toLocaleString()} of {activeDates.length.toLocaleString()} included photos selected
@@ -393,6 +410,19 @@ function PresetButton({
   );
 }
 
+function RangePresetButton({ label, disabled, onClick }: { label: string; disabled: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="min-h-9 rounded-md border border-ink/10 bg-paper px-3 text-xs font-black text-ink/65 shadow-line transition hover:border-teal/45 hover:bg-white hover:text-ink disabled:cursor-not-allowed disabled:opacity-45"
+    >
+      {label}
+    </button>
+  );
+}
+
 function Summary({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md bg-white p-3 shadow-line">
@@ -423,6 +453,14 @@ function motionLabel(config: RenderConfig) {
 type RenderStats = {
   timeline: Array<{ date: string; skipped: boolean }>;
 };
+
+type RangePreset = "first10" | "latest10" | "middle10" | "first30" | "latest30" | "firstMonth" | "latestMonth";
+
+function addDays(day: string, offset: number) {
+  const date = new Date(`${day}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + offset);
+  return date.toISOString().slice(0, 10);
+}
 
 function countDatesInRange(dates: string[], startDate?: string | null, endDate?: string | null) {
   if (!startDate && !endDate) return dates.length;
