@@ -113,7 +113,7 @@ export function Layout({
 }
 
 function pickVisibleJob(jobs: JobStatus[]) {
-  return jobs.find((job) => ["queued", "running"].includes(job.status)) ?? jobs.find((job) => ["failed", "cancelled"].includes(job.status)) ?? null;
+  return jobs.find((job) => ["queued", "running"].includes(job.status)) ?? null;
 }
 
 function GlobalProgress({ job, onCancel }: { job: JobStatus | null; onCancel?: () => void }) {
