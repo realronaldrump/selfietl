@@ -11,6 +11,7 @@ import {
   ScanFace,
   Settings2,
   SlidersHorizontal,
+  XCircle,
 } from "lucide-react";
 import type { Project } from "@/api/client";
 import { api, type JobStatus } from "@/api/client";
@@ -100,7 +101,10 @@ export function Layout({
               <StatusPill tone={currentProject?.skipped_count ? "warn" : "default"}>{currentProject?.skipped_count ?? 0} to review</StatusPill>
             </div>
           </div>
-          <GlobalProgress job={currentJob} />
+          <GlobalProgress
+            job={currentJob}
+            onCancel={currentJob && ["queued", "running"].includes(currentJob.status) ? () => api.cancelJob(currentJob.id) : undefined}
+          />
         </header>
         <div className="px-4 py-5 md:px-6">{children}</div>
       </main>
@@ -112,7 +116,7 @@ function pickVisibleJob(jobs: JobStatus[]) {
   return jobs.find((job) => ["queued", "running"].includes(job.status)) ?? jobs.find((job) => ["failed", "cancelled"].includes(job.status)) ?? null;
 }
 
-function GlobalProgress({ job }: { job: JobStatus | null }) {
+function GlobalProgress({ job, onCancel }: { job: JobStatus | null; onCancel?: () => void }) {
   if (!job) return null;
   const percent = Math.round((job.progress ?? 0) * 100);
   const title = job.status === "running" || job.status === "queued" ? plainJobName(job.name, job.stage) : job.status === "failed" ? "Something needs attention" : "Stopped";
@@ -126,6 +130,12 @@ function GlobalProgress({ job }: { job: JobStatus | null }) {
         <div className="shrink-0 text-sm font-black text-ink">
           {job.progress_total > 0 ? `${job.progress_done.toLocaleString()} / ${job.progress_total.toLocaleString()}` : `${percent}%`}
         </div>
+        {onCancel ? (
+          <Button type="button" variant="danger" size="sm" onClick={onCancel}>
+            <XCircle className="h-4 w-4" />
+            Cancel
+          </Button>
+        ) : null}
       </div>
       <div className="mt-3">
         <ProgressBar value={job.progress ?? 0} />
@@ -142,8 +152,10 @@ function plainJobName(name: string, stage: string | null) {
     canonical: "Choosing the steady face anchor",
     align: "Locking each face into place",
     render: "Creating the video",
+    prepare_video: "Preparing video frames",
     render_frames: "Creating video frames",
     ffmpeg: "Saving the movie file",
+    cancel: "Stopping",
   };
   return labels[raw] ?? "Working";
 }

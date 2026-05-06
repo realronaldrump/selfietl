@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 import numpy as np
 from PIL import Image
 from scipy.spatial import Delaunay
 
+CancelCheck = Callable[[], None]
+
 
 def load_aligned_landmarks(path: str | Path) -> np.ndarray:
-    payload = np.load(path)
-    return np.asarray(payload["landmarks"], dtype=np.float64)[:, :2]
+    with np.load(path) as payload:
+        return np.asarray(payload["landmarks"], dtype=np.float64)[:, :2]
 
 
 def morph_pair(
@@ -19,6 +21,7 @@ def morph_pair(
     landmarks_a_path: str | Path,
     landmarks_b_path: str | Path,
     intermediate_frames: int,
+    cancel_check: CancelCheck | None = None,
 ) -> Iterable[Image.Image]:
     image_a = Image.open(image_a_path).convert("RGB")
     image_b = Image.open(image_b_path).convert("RGB")
@@ -26,7 +29,7 @@ def morph_pair(
         image_b = image_b.resize(image_a.size, Image.Resampling.LANCZOS)
     landmarks_a = load_aligned_landmarks(landmarks_a_path)
     landmarks_b = load_aligned_landmarks(landmarks_b_path)
-    yield from morph_images(image_a, image_b, landmarks_a, landmarks_b, intermediate_frames)
+    yield from morph_images(image_a, image_b, landmarks_a, landmarks_b, intermediate_frames, cancel_check=cancel_check)
 
 
 def morph_images(
@@ -35,11 +38,17 @@ def morph_images(
     landmarks_a: np.ndarray,
     landmarks_b: np.ndarray,
     intermediate_frames: int,
+    cancel_check: CancelCheck | None = None,
 ) -> Iterable[Image.Image]:
+    def check_cancel() -> None:
+        if cancel_check:
+            cancel_check()
+
     if intermediate_frames <= 0:
         return
     if landmarks_a.shape != landmarks_b.shape or len(landmarks_a) < 3:
         for idx in range(intermediate_frames):
+            check_cancel()
             yield Image.blend(image_a, image_b, (idx + 1) / (intermediate_frames + 1))
         return
 
@@ -47,6 +56,7 @@ def morph_images(
         import cv2
     except Exception:
         for idx in range(intermediate_frames):
+            check_cancel()
             yield Image.blend(image_a, image_b, (idx + 1) / (intermediate_frames + 1))
         return
 
@@ -59,9 +69,10 @@ def morph_images(
     arr_a = np.asarray(image_a, dtype=np.float32)
     arr_b = np.asarray(image_b, dtype=np.float32)
     for idx in range(intermediate_frames):
+        check_cancel()
         t = (idx + 1) / (intermediate_frames + 1)
         target = (1 - t) * points_a + t * points_b
-        frame = _morph_frame_cv2(cv2, arr_a, arr_b, points_a, points_b, target, triangles, t)
+        frame = _morph_frame_cv2(cv2, arr_a, arr_b, points_a, points_b, target, triangles, t, cancel_check=cancel_check)
         yield Image.fromarray(np.clip(frame, 0, 255).astype(np.uint8))
 
 
@@ -90,11 +101,14 @@ def _morph_frame_cv2(
     target: np.ndarray,
     triangles: np.ndarray,
     t: float,
+    cancel_check: CancelCheck | None = None,
 ) -> np.ndarray:
     height, width = image_a.shape[:2]
     output = np.zeros_like(image_a, dtype=np.float32)
     coverage = np.zeros((height, width, 1), dtype=np.float32)
-    for tri in triangles:
+    for index, tri in enumerate(triangles):
+        if cancel_check and index % 16 == 0:
+            cancel_check()
         tri_a = points_a[tri].astype(np.float32)
         tri_b = points_b[tri].astype(np.float32)
         tri_t = target[tri].astype(np.float32)

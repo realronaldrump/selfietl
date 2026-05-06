@@ -71,8 +71,8 @@ def render_project(
     for idx, row in enumerate(rows):
         check_cancel()
         captured_at = _parse_datetime(row["captured_at"])
-        image = Image.open(source_assets[row["hash"]]["image"]).convert("RGB")
-        image = draw_date_overlay(image, captured_at, render_config.date_overlay)
+        with Image.open(source_assets[row["hash"]]["image"]) as source_image:
+            image = draw_date_overlay(source_image.convert("RGB"), captured_at, render_config.date_overlay)
         _save_frame(frames_dir, frame_index, image)
         frame_index += 1
         if progress:
@@ -88,6 +88,7 @@ def render_project(
                     source_assets[next_row["hash"]]["landmarks"],
                     render_config.intermediate_frames,
                     work_dir / "rife" / f"{idx:05d}",
+                    cancel_check,
                 )
             else:
                 intermediates = morph_pair(
@@ -96,6 +97,7 @@ def render_project(
                     source_assets[row["hash"]]["landmarks"],
                     source_assets[next_row["hash"]]["landmarks"],
                     render_config.intermediate_frames,
+                    cancel_check=cancel_check,
                 )
             for intermediate in intermediates:
                 check_cancel()
@@ -244,8 +246,8 @@ def _source_assets(
         output_image = prepared_dir / f"{row['hash']}.jpg"
         output_landmarks = prepared_dir / f"{row['hash']}.npz"
         with Image.open(source_path) as image:
-            payload = np.load(landmarks_path)
-            source_landmarks = np.asarray(payload["landmarks"], dtype=np.float64)
+            with np.load(landmarks_path) as payload:
+                source_landmarks = np.asarray(payload["landmarks"], dtype=np.float64)
             prepared, prepared_landmarks = _prepare_image_and_landmarks(image.convert("RGB"), source_landmarks, render_config)
             prepared.save(output_image, "JPEG", quality=95, optimize=True)
             np.savez_compressed(
@@ -279,14 +281,19 @@ def _rife_or_fallback(
     landmarks_b: Path,
     intermediate_frames: int,
     output_dir: Path,
+    cancel_check: CancelCheck | None = None,
 ):
     try:
         from selfietl.pipeline.morph_rife import interpolate_pair
 
+        if cancel_check:
+            cancel_check()
         for path in interpolate_pair(image_a, image_b, output_dir, intermediate_frames):
+            if cancel_check:
+                cancel_check()
             yield Image.open(path).convert("RGB")
     except Exception:
-        yield from morph_pair(image_a, image_b, landmarks_a, landmarks_b, intermediate_frames)
+        yield from morph_pair(image_a, image_b, landmarks_a, landmarks_b, intermediate_frames, cancel_check=cancel_check)
 
 
 def _save_frame(frames_dir: Path, index: int, image: Image.Image) -> Path:

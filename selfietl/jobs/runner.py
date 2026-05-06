@@ -130,7 +130,7 @@ class JobRunner:
             return False
         job.cancel_event.set()
         if job.status in {"queued", "running"}:
-            job.message = "Cancelling after the current file finishes"
+            job.message = "Stopping. This may take a few seconds."
             job.stage = "cancel"
             job.queue.put_nowait({"type": "status", **job.public()})
         return True
