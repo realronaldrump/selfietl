@@ -63,70 +63,73 @@ def render_project(
     work_dir = config.render_cache_dir / f"render_{render_id}"
     if work_dir.exists():
         shutil.rmtree(work_dir)
-    frames_dir = work_dir / "frames"
-    frames_dir.mkdir(parents=True, exist_ok=True)
-    needs_morph_assets = render_config.intermediate_frames > 0 and render_config.morph_mode != "none"
-    source_assets = _source_assets(config, rows, render_config, work_dir, progress, cancel_check) if needs_morph_assets or render_config.color_normalize else None
+    try:
+        frames_dir = work_dir / "frames"
+        frames_dir.mkdir(parents=True, exist_ok=True)
+        needs_morph_assets = render_config.intermediate_frames > 0 and render_config.morph_mode != "none"
+        source_assets = _source_assets(config, rows, render_config, work_dir, progress, cancel_check) if needs_morph_assets or render_config.color_normalize else None
 
-    frame_index = 1
-    total_pairs = max(0, len(rows) - 1)
-    expected_frames = len(rows) + total_pairs * render_config.intermediate_frames
-    for idx, row in enumerate(rows):
-        check_cancel()
-        captured_at = _parse_datetime(row["captured_at"])
-        if source_assets:
-            with Image.open(source_assets[row["hash"]]["image"]) as source_image:
-                image = draw_date_overlay(source_image.convert("RGB"), captured_at, render_config.date_overlay)
-        else:
-            with Image.open(aligned_path(config, row["hash"])) as source_image:
-                image = prepare_frame(source_image.convert("RGB"), render_config, captured_at)
-        _save_frame(frames_dir, frame_index, image)
-        frame_index += 1
-        if progress:
-            progress("render_frames", frame_index - 1, expected_frames, f"Wrote frame {frame_index - 1}")
-
-        if idx < len(rows) - 1 and render_config.intermediate_frames > 0 and render_config.morph_mode != "none":
-            next_row = rows[idx + 1]
-            if render_config.morph_mode == "rife":
-                intermediates = _rife_or_fallback(
-                    source_assets[row["hash"]]["image"],
-                    source_assets[next_row["hash"]]["image"],
-                    source_assets[row["hash"]]["landmarks"],
-                    source_assets[next_row["hash"]]["landmarks"],
-                    render_config.intermediate_frames,
-                    work_dir / "rife" / f"{idx:05d}",
-                    cancel_check,
-                )
+        frame_index = 1
+        total_pairs = max(0, len(rows) - 1)
+        expected_frames = len(rows) + total_pairs * render_config.intermediate_frames
+        for idx, row in enumerate(rows):
+            check_cancel()
+            captured_at = _parse_datetime(row["captured_at"])
+            if source_assets:
+                with Image.open(source_assets[row["hash"]]["image"]) as source_image:
+                    image = draw_date_overlay(source_image.convert("RGB"), captured_at, render_config.date_overlay)
             else:
-                intermediates = morph_pair(
-                    source_assets[row["hash"]]["image"],
-                    source_assets[next_row["hash"]]["image"],
-                    source_assets[row["hash"]]["landmarks"],
-                    source_assets[next_row["hash"]]["landmarks"],
-                    render_config.intermediate_frames,
-                    cancel_check=cancel_check,
-                )
-            for intermediate in intermediates:
-                check_cancel()
-                frame = draw_date_overlay(intermediate.convert("RGB"), captured_at, render_config.date_overlay)
-                _save_frame(frames_dir, frame_index, frame)
-                frame_index += 1
-                if progress:
-                    progress("render_frames", frame_index - 1, expected_frames, f"Wrote frame {frame_index - 1}")
+                with Image.open(aligned_path(config, row["hash"])) as source_image:
+                    image = prepare_frame(source_image.convert("RGB"), render_config, captured_at)
+            _save_frame(frames_dir, frame_index, image)
+            frame_index += 1
+            if progress:
+                progress("render_frames", frame_index - 1, expected_frames, f"Wrote frame {frame_index - 1}")
 
-    if progress:
-        progress("ffmpeg", 0, 1, "Assembling video with FFmpeg")
-    _run_ffmpeg(frames_dir, output_path, render_config, frame_index - 1, cancel_check=cancel_check)
+            if idx < len(rows) - 1 and render_config.intermediate_frames > 0 and render_config.morph_mode != "none":
+                next_row = rows[idx + 1]
+                if render_config.morph_mode == "rife":
+                    intermediates = _rife_or_fallback(
+                        source_assets[row["hash"]]["image"],
+                        source_assets[next_row["hash"]]["image"],
+                        source_assets[row["hash"]]["landmarks"],
+                        source_assets[next_row["hash"]]["landmarks"],
+                        render_config.intermediate_frames,
+                        work_dir / "rife" / f"{idx:05d}",
+                        cancel_check,
+                    )
+                else:
+                    intermediates = morph_pair(
+                        source_assets[row["hash"]]["image"],
+                        source_assets[next_row["hash"]]["image"],
+                        source_assets[row["hash"]]["landmarks"],
+                        source_assets[next_row["hash"]]["landmarks"],
+                        render_config.intermediate_frames,
+                        cancel_check=cancel_check,
+                    )
+                for intermediate in intermediates:
+                    check_cancel()
+                    frame = draw_date_overlay(intermediate.convert("RGB"), captured_at, render_config.date_overlay)
+                    _save_frame(frames_dir, frame_index, frame)
+                    frame_index += 1
+                    if progress:
+                        progress("render_frames", frame_index - 1, expected_frames, f"Wrote frame {frame_index - 1}")
 
-    finished_at = datetime.now().isoformat(sep=" ")
-    with db.connect() as conn:
-        conn.execute(
-            "UPDATE renders SET output_path = ?, finished_at = ?, status = ? WHERE id = ?",
-            (str(output_path), finished_at, "done", render_id),
-        )
-    if progress:
-        progress("ffmpeg", 1, 1, "Export complete")
-    return {"output_path": str(output_path), "frames": frame_index - 1}
+        if progress:
+            progress("ffmpeg", 0, 1, "Assembling video with FFmpeg")
+        _run_ffmpeg(frames_dir, output_path, render_config, frame_index - 1, cancel_check=cancel_check)
+
+        finished_at = datetime.now().isoformat(sep=" ")
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE renders SET output_path = ?, finished_at = ?, status = ? WHERE id = ?",
+                (str(output_path), finished_at, "done", render_id),
+            )
+        if progress:
+            progress("ffmpeg", 1, 1, "Export complete")
+        return {"output_path": str(output_path), "frames": frame_index - 1}
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def create_render_row(db: Database, project_id: int, render_config: RenderConfig) -> int:
