@@ -306,7 +306,7 @@ function DayPhotoView({
       </div>
       <div className="mt-4 grid grid-cols-2 gap-2">
         <Button variant="secondary" onClick={onToggle} disabled={onTogglePending}>
-          {photo.skipped ? "Include" : "Mark not included"}
+          {photo.skipped ? "Include" : "Exclude"}
         </Button>
         <Button
           variant="ghost"

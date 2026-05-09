@@ -149,14 +149,26 @@ def detect_project(
 
 
 def detect_landmarks(path: Path, config: AppConfig, face_mesh=None) -> DetectionResult:
-    mediapipe_result = _detect_with_mediapipe(path, config, face_mesh=face_mesh)
-    if mediapipe_result.landmarks is not None:
+    owns_face_mesh = False
+    if face_mesh is None:
+        try:
+            face_mesh = _create_mediapipe_face_mesh(config)
+            owns_face_mesh = True
+        except Exception:
+            face_mesh = None
+
+    try:
+        mediapipe_result = _detect_with_mediapipe(path, config, face_mesh=face_mesh)
+        if mediapipe_result.landmarks is not None:
+            return mediapipe_result
+        opencv_result = _detect_with_opencv(path, config)
+        if opencv_result.landmarks is not None or "opencv_face_detected_without_landmarks" in opencv_result.warnings:
+            opencv_result.warnings = [*mediapipe_result.warnings, *opencv_result.warnings]
+            return opencv_result
         return mediapipe_result
-    opencv_result = _detect_with_opencv(path, config)
-    if opencv_result.landmarks is not None or "opencv_face_detected_without_landmarks" in opencv_result.warnings:
-        opencv_result.warnings = [*mediapipe_result.warnings, *opencv_result.warnings]
-        return opencv_result
-    return mediapipe_result
+    finally:
+        if owns_face_mesh and face_mesh is not None:
+            face_mesh.close()
 
 
 def _create_mediapipe_face_mesh(config: AppConfig):

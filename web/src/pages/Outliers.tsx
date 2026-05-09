@@ -130,7 +130,7 @@ function ReviewCard({
           </Button>
           <Button type="button" variant="secondary" disabled={pending} onClick={onExclude}>
             <XCircle className="h-4 w-4" />
-            Not include
+            Exclude
           </Button>
         </div>
         <div className="truncate font-mono text-[0.68rem] font-semibold text-ink/35">{photo.path}</div>

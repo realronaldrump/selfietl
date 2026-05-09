@@ -84,7 +84,7 @@ export function Grid({ project, mode = "all" }: { project: Project; mode?: GridM
 
 function PhotoTile({ photo, onOpen, onToggle }: { photo: Photo; onOpen: () => void; onToggle: () => void }) {
   const quality = photo.quality_score ?? 0;
-  const actionLabel = photo.skipped ? "Include" : "Not include";
+  const actionLabel = photo.skipped ? "Include" : "Exclude";
   return (
     <div className={cn("overflow-hidden rounded-lg bg-paper shadow-line", photo.skipped && "opacity-55")}>
       <button className="group relative block aspect-square w-full bg-ink/8" onClick={onOpen}>
