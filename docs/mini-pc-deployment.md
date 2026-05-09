@@ -12,6 +12,14 @@ SelfieTL is deployed permanently on the mini PC over Tailscale.
 
 The app is managed as a system systemd service, similar to `drive-web.service`, and runs as user `davis`.
 
+System packages required by the full detector stack:
+
+```bash
+sudo apt-get install -y libegl1 libgles2
+```
+
+MediaPipe can import without these packages, but face landmarking fails at runtime without `libGLESv2.so.2`; the app then falls back to OpenCV, which can detect a face box but cannot save the detailed face map.
+
 Useful commands on the mini PC:
 
 ```bash
