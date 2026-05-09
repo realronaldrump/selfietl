@@ -482,9 +482,9 @@ function UploadReviewCard({
             </Button>
           </div>
 
-          <div className="mt-3 space-y-1">
+          <div className="mt-3 min-w-0 space-y-1">
             <Label>Assigned date and time</Label>
-            <div className="relative">
+            <div className="relative min-w-0">
               <Calendar className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink/35" />
               <Input
                 type="datetime-local"
@@ -492,7 +492,7 @@ function UploadReviewCard({
                 value={item.capturedAtLocal}
                 onChange={(event) => onDateChange(event.target.value)}
                 disabled={disabled || item.metadataLoading}
-                className="pl-9"
+                className="min-w-0 max-w-full pl-9 pr-2 text-[0.8125rem] sm:text-sm"
               />
             </div>
           </div>
