@@ -93,9 +93,9 @@ export function Stats({ project }: { project: Project }) {
           </div>
 
           <div className="grid grid-cols-2 gap-2 text-sm">
-            <HeroNumber label="Longest streak" value={`${view.longestStreak}d`} />
+            <HeroNumber label="Current streak" value={`${view.currentStreakLength}d`} detail={view.currentStreakLabel} />
+            <HeroNumber label="Longest streak" value={view.longestStreak ? `${view.longestStreak.length}d` : "-"} detail={view.longestStreak ? streakDateRange(view.longestStreak) : "No streaks yet"} />
             <HeroNumber label="Avg / month" value={view.avgPerMonth.toFixed(1)} />
-            <HeroNumber label="Best quality" value={formatDecimal(view.bestQuality)} />
             <HeroNumber label="Pose drift" value={formatDegrees(view.avgPoseDrift)} />
           </div>
         </div>
@@ -112,15 +112,21 @@ export function Stats({ project }: { project: Project }) {
       <div className="grid gap-4 xl:grid-cols-[1.35fr_0.65fr]">
         <ChartPanel
           title="Quality over time"
-          subtitle="Each point is one selfie. Flagged captures sit on the lower rail so review clusters stand out."
+          subtitle="Scaled to your observed quality range so small dips are visible. Dashed line marks the average."
         >
           <ResponsiveContainer width="100%" height={280}>
             <ComposedChart data={view.timeline}>
               <CartesianGrid stroke="#1114121c" vertical={false} />
               <XAxis dataKey="label" minTickGap={32} tick={{ fontSize: 11, fill: "#11141299" }} />
-              <YAxis domain={[0, 1]} tick={{ fontSize: 11, fill: "#11141299" }} width={34} />
+              <YAxis
+                domain={view.qualityDomain}
+                ticks={view.qualityTicks}
+                tick={{ fontSize: 11, fill: "#11141299" }}
+                tickFormatter={formatAxisDecimal}
+                width={42}
+              />
               <Tooltip content={<QualityTooltip />} />
-              <ReferenceLine y={0.7} stroke="#1F7A75" strokeDasharray="4 4" strokeOpacity={0.45} />
+              {view.avgQuality != null ? <ReferenceLine y={view.avgQuality} stroke="#C59A2D" strokeDasharray="4 4" strokeOpacity={0.7} /> : null}
               <Area type="monotone" dataKey="quality" fill="#1F7A7520" stroke="none" connectNulls />
               <Line type="monotone" dataKey="quality" stroke="#1F7A75" strokeWidth={2.4} dot={false} connectNulls />
               <Scatter dataKey="flaggedQuality" fill="#C94F31" />
@@ -128,19 +134,20 @@ export function Stats({ project }: { project: Project }) {
           </ResponsiveContainer>
         </ChartPanel>
 
-        <Panel className="grid content-between gap-4">
-          <div>
-            <h2 className="text-sm font-black uppercase tracking-[0.12em] text-ink/55">Coverage</h2>
-            <div className="mt-2 text-3xl font-black text-ink">{view.coverageLabel}</div>
-            <p className="mt-1 text-sm font-semibold text-ink/55">from first to latest captured selfie</p>
-          </div>
-          <CalendarStrip months={view.months} peak={view.peakMonthCount} />
-          <div className="grid grid-cols-3 gap-2">
-            <MiniStat label="First" value={view.firstDateLabel} />
-            <MiniStat label="Latest" value={view.lastDateLabel} />
-            <MiniStat label="Months" value={String(view.months.length)} />
-          </div>
-        </Panel>
+        <div className="grid gap-4">
+          <StreaksPanel
+            currentStreakLength={view.currentStreakLength}
+            currentStreakLabel={view.currentStreakLabel}
+            bestStreaks={view.bestStreaks}
+          />
+          <CoveragePanel
+            coverageLabel={view.coverageLabel}
+            months={view.months}
+            peakMonthCount={view.peakMonthCount}
+            firstDateLabel={view.firstDateLabel}
+            lastDateLabel={view.lastDateLabel}
+          />
+        </div>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -303,6 +310,14 @@ function buildStatsView(stats: StatsPayload | undefined, project: Project) {
   const firstDate = timelineRaw[0]?.date ?? null;
   const lastDate = timelineRaw[timelineRaw.length - 1]?.date ?? null;
   const spanDays = firstDate && lastDate ? Math.max(1, daysBetween(firstDate, lastDate) + 1) : 0;
+  const streaks = buildStreaks(timelineRaw.map((item) => item.date));
+  const bestStreaks = [...streaks]
+    .sort((a, b) => b.length - a.length || b.end.localeCompare(a.end))
+    .slice(0, 3);
+  const latestStreak = streaks[streaks.length - 1] ?? null;
+  const today = isoDate(new Date());
+  const currentStreak = latestStreak?.end === today ? latestStreak : null;
+  const qualityScale = qualityAxisScale(qualityValues);
   const avgPoseDrift = average(
     poseRaw.map((item) => {
       const values = [item.yaw, item.pitch, item.roll].filter(isNumber);
@@ -324,12 +339,91 @@ function buildStatsView(stats: StatsPayload | undefined, project: Project) {
     activeRatio: total ? Math.round((included / total) * 100) : 0,
     reviewRatio: total ? Math.round((skipped / total) * 100) : 0,
     avgQuality: average(qualityValues),
-    bestQuality: qualityValues.length ? Math.max(...qualityValues) : null,
+    qualityDomain: qualityScale.domain,
+    qualityTicks: qualityScale.ticks,
     avgPerMonth: months.length ? total / months.length : 0,
     peakMonthCount: months.reduce((max, item) => Math.max(max, item.count), 0),
-    longestStreak: longestStreak(timelineRaw.map((item) => item.date)),
+    currentStreakLength: currentStreak?.length ?? 0,
+    currentStreakLabel: currentStreak
+      ? streakDateRange(currentStreak)
+      : latestStreak
+        ? `Last selfie ${formatFullDate(latestStreak.end)}`
+        : "No selfies yet",
+    longestStreak: bestStreaks[0] ?? null,
+    bestStreaks,
     avgPoseDrift,
   };
+}
+
+function StreaksPanel({
+  currentStreakLength,
+  currentStreakLabel,
+  bestStreaks,
+}: {
+  currentStreakLength: number;
+  currentStreakLabel: string;
+  bestStreaks: Streak[];
+}) {
+  return (
+    <Panel>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-black uppercase tracking-[0.12em] text-ink/55">Streaks</h2>
+          <div className="mt-2 text-3xl font-black text-ink">{currentStreakLength} days</div>
+          <p className="mt-1 text-sm font-semibold text-ink/55">Current streak: {currentStreakLabel}</p>
+        </div>
+        <Badge tone={currentStreakLength > 0 ? "good" : "warn"}>{currentStreakLength > 0 ? "active" : "paused"}</Badge>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        {bestStreaks.length ? (
+          bestStreaks.map((streak, index) => <StreakRow key={`${streak.start}-${streak.end}`} rank={index + 1} streak={streak} />)
+        ) : (
+          <div className="rounded-md bg-white p-3 text-sm font-semibold text-ink/55">No streaks yet.</div>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+function StreakRow({ rank, streak }: { rank: number; streak: Streak }) {
+  return (
+    <div className="grid grid-cols-[2.5rem_4rem_1fr] items-center gap-2 rounded-md bg-white p-2 shadow-line">
+      <div className="text-xs font-black uppercase tracking-[0.12em] text-ink/45">#{rank}</div>
+      <div className="text-lg font-black text-ink">{streak.length}d</div>
+      <div className="min-w-0 text-xs font-bold text-ink/60">{streakDateRange(streak)}</div>
+    </div>
+  );
+}
+
+function CoveragePanel({
+  coverageLabel,
+  months,
+  peakMonthCount,
+  firstDateLabel,
+  lastDateLabel,
+}: {
+  coverageLabel: string;
+  months: Array<{ month: string; label: string; count: number }>;
+  peakMonthCount: number;
+  firstDateLabel: string;
+  lastDateLabel: string;
+}) {
+  return (
+    <Panel className="grid content-between gap-4">
+      <div>
+        <h2 className="text-sm font-black uppercase tracking-[0.12em] text-ink/55">Coverage</h2>
+        <div className="mt-2 text-3xl font-black text-ink">{coverageLabel}</div>
+        <p className="mt-1 text-sm font-semibold text-ink/55">from first to latest captured selfie</p>
+      </div>
+      <CalendarStrip months={months} peak={peakMonthCount} />
+      <div className="grid grid-cols-3 gap-2">
+        <MiniStat label="First" value={firstDateLabel} />
+        <MiniStat label="Latest" value={lastDateLabel} />
+        <MiniStat label="Months" value={String(months.length)} />
+      </div>
+    </Panel>
+  );
 }
 
 function CalendarStrip({ months, peak }: { months: Array<{ month: string; label: string; count: number }>; peak: number }) {
@@ -351,11 +445,12 @@ function CalendarStrip({ months, peak }: { months: Array<{ month: string; label:
   );
 }
 
-function HeroNumber({ label, value }: { label: string; value: string }) {
+function HeroNumber({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return (
     <div className="rounded-md border border-ink/10 bg-white/75 p-3 shadow-line">
       <div className="text-[0.62rem] font-black uppercase tracking-[0.16em] text-ink/45">{label}</div>
       <div className="mt-2 text-2xl font-black text-ink">{value}</div>
+      {detail ? <div className="mt-1 truncate text-[0.68rem] font-bold text-ink/50">{detail}</div> : null}
     </div>
   );
 }
@@ -440,20 +535,32 @@ function formatDecimal(value: number | null) {
   return value == null ? "-" : value.toFixed(2);
 }
 
+function formatAxisDecimal(value: number) {
+  const rounded = Number(value.toFixed(2));
+  if (Number.isInteger(rounded)) return String(rounded);
+  return rounded.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
 function formatDegrees(value: number | null) {
   return value == null ? "-" : `${Math.round(value)}deg`;
 }
 
 function compactDate(value: string) {
-  const date = new Date(value);
+  const date = localDateFromIsoDay(toIsoDay(value));
   if (Number.isNaN(date.getTime())) return value.slice(0, 10);
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function formatDate(value: string) {
-  const date = new Date(value);
+  const date = localDateFromIsoDay(toIsoDay(value));
   if (Number.isNaN(date.getTime())) return value.slice(0, 10);
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function formatFullDate(day: string) {
+  const date = localDateFromIsoDay(toIsoDay(day));
+  if (Number.isNaN(date.getTime())) return day;
+  return date.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
 }
 
 function monthLabel(value: string) {
@@ -463,21 +570,74 @@ function monthLabel(value: string) {
 }
 
 function daysBetween(start: string, end: string) {
-  const startDate = new Date(start);
-  const endDate = new Date(end);
-  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return 0;
-  return Math.round((endDate.getTime() - startDate.getTime()) / 86_400_000);
+  const startParts = toIsoDay(start).split("-").map(Number);
+  const endParts = toIsoDay(end).split("-").map(Number);
+  if (startParts.length !== 3 || endParts.length !== 3 || startParts.some(Number.isNaN) || endParts.some(Number.isNaN)) return 0;
+  const startTime = Date.UTC(startParts[0], startParts[1] - 1, startParts[2]);
+  const endTime = Date.UTC(endParts[0], endParts[1] - 1, endParts[2]);
+  return Math.round((endTime - startTime) / 86_400_000);
 }
 
-function longestStreak(dates: string[]) {
-  const days = Array.from(new Set(dates.map((date) => date.slice(0, 10)))).sort();
-  let longest = 0;
-  let current = 0;
-  let previous: string | null = null;
+type Streak = {
+  start: string;
+  end: string;
+  length: number;
+};
+
+function buildStreaks(dates: string[]) {
+  const days = Array.from(new Set(dates.map(toIsoDay).filter(Boolean))).sort();
+  const streaks: Streak[] = [];
+  let start: string | null = null;
+  let end: string | null = null;
   for (const day of days) {
-    current = previous && daysBetween(previous, day) === 1 ? current + 1 : 1;
-    longest = Math.max(longest, current);
-    previous = day;
+    if (!start || !end || daysBetween(end, day) !== 1) {
+      if (start && end) streaks.push({ start, end, length: daysBetween(start, end) + 1 });
+      start = day;
+    }
+    end = day;
   }
-  return longest;
+  if (start && end) streaks.push({ start, end, length: daysBetween(start, end) + 1 });
+  return streaks;
+}
+
+function streakDateRange(streak: Streak) {
+  if (streak.start === streak.end) return formatFullDate(streak.start);
+  return `${formatFullDate(streak.start)} - ${formatFullDate(streak.end)}`;
+}
+
+function qualityAxisScale(values: number[]) {
+  if (!values.length) return { domain: [0, 1] as [number, number], ticks: [0, 0.25, 0.5, 0.75, 1] };
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = Math.max(max - min, 0.04);
+  let lower = Math.max(0, min - span * 0.18);
+  let upper = Math.min(1, max + span * 0.08);
+  if (upper - lower < 0.08) {
+    const middle = (min + max) / 2;
+    lower = Math.max(0, middle - 0.04);
+    upper = Math.min(1, middle + 0.04);
+    if (upper === 1) lower = Math.max(0, 0.92);
+    if (lower === 0) upper = Math.min(1, 0.08);
+  }
+  lower = Math.max(0, Number(lower.toFixed(2)));
+  upper = Math.min(1, Number(upper.toFixed(2)));
+  const step = (upper - lower) / 4;
+  const ticks = Array.from({ length: 5 }, (_, index) => Number((lower + step * index).toFixed(2)));
+  return { domain: [lower, upper] as [number, number], ticks };
+}
+
+function toIsoDay(value: string) {
+  return value.slice(0, 10);
+}
+
+function localDateFromIsoDay(day: string) {
+  const [year, month, date] = day.split("-").map(Number);
+  return new Date(year, month - 1, date);
+}
+
+function isoDate(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
