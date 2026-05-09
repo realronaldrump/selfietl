@@ -108,7 +108,7 @@ def update_auto_render(
 
 
 @router.post("/run", response_model=StartJobResponse)
-def run_auto_render_now(
+async def run_auto_render_now(
     request: Request,
     db: Database = Depends(get_db),
     config: AppConfig = Depends(get_config),
