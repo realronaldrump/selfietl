@@ -192,12 +192,24 @@ function RecentList({
 
 function DaySheet({ day, onClose, onDateChanged }: { day: string; onClose: () => void; onDateChanged: (day: string) => void }) {
   const queryClient = useQueryClient();
+  const [selectedHash, setSelectedHash] = useState<string | null>(null);
   const dayQuery = useQuery({
     queryKey: ["day", day],
     queryFn: () => api.photosByDate(day),
   });
   const photos = dayQuery.data?.photos ?? [];
-  const photo = primaryPhotoForDay(photos);
+  const primaryPhoto = primaryPhotoForDay(photos);
+  const photo = photos.find((item) => item.hash === selectedHash) ?? primaryPhoto;
+
+  useEffect(() => {
+    if (photos.length === 0) {
+      setSelectedHash(null);
+      return;
+    }
+    if (!selectedHash || !photos.some((item) => item.hash === selectedHash)) {
+      setSelectedHash(primaryPhoto?.hash ?? photos[photos.length - 1].hash);
+    }
+  }, [photos, primaryPhoto, selectedHash]);
 
   const includeMutation = useMutation({
     mutationFn: ({ hash, skipped }: { hash: string; skipped: boolean }) =>
@@ -261,12 +273,23 @@ function DaySheet({ day, onClose, onDateChanged }: { day: string; onClose: () =>
         )}
         {photos.length > 1 ? (
           <div className="mt-4">
-            <h3 className="text-xs font-black uppercase tracking-[0.16em] text-ink/55">Earlier captures</h3>
+            <h3 className="text-xs font-black uppercase tracking-[0.16em] text-ink/55">Captures for this day</h3>
             <div className="mt-2 grid grid-cols-3 gap-2">
-              {photos.slice(0, -1).map((earlier) => (
-                <a key={earlier.hash} href={earlier.image_url} target="_blank" rel="noreferrer" className="group block overflow-hidden rounded-md bg-ink">
-                  <img src={earlier.thumb_url} alt="" className="aspect-square w-full object-cover transition group-hover:opacity-85" />
-                </a>
+              {photos.map((capture) => (
+                <button
+                  key={capture.hash}
+                  type="button"
+                  onClick={() => setSelectedHash(capture.hash)}
+                  className={cn(
+                    "group block overflow-hidden rounded-md border bg-ink text-left",
+                    capture.hash === photo?.hash ? "border-teal ring-2 ring-teal/25" : "border-ink/10",
+                  )}
+                >
+                  <img src={capture.thumb_url} alt="" className="aspect-square w-full object-cover transition group-hover:opacity-85" />
+                  <div className="truncate bg-paper px-2 py-1 text-[0.65rem] font-black text-ink/65">
+                    {formatCaptureTime(capture.captured_at)}
+                  </div>
+                </button>
               ))}
             </div>
           </div>
@@ -477,6 +500,12 @@ function formatCapturedAt(value: string) {
   const date = new Date(value.replace(" ", "T"));
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function formatCaptureTime(value: string) {
+  const date = new Date(value.replace(" ", "T"));
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
 function capturedAtToInputs(value: string) {
