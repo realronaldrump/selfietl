@@ -124,6 +124,16 @@ class JobRunner:
     def list(self) -> list[Job]:
         return sorted(self.jobs.values(), key=lambda job: job.created_at, reverse=True)
 
+    def clear_terminal(self) -> int:
+        terminal_ids = [
+            job_id
+            for job_id, job in self.jobs.items()
+            if job.status in {"done", "failed", "cancelled"}
+        ]
+        for job_id in terminal_ids:
+            self.jobs.pop(job_id, None)
+        return len(terminal_ids)
+
     def cancel(self, job_id: str) -> bool:
         job = self.jobs.get(job_id)
         if job is None:

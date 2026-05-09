@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 
 from selfietl.api.deps import get_config, get_db
@@ -15,6 +16,9 @@ from selfietl.models import JobResponse, RenderRequest, RenderResponse, StartJob
 from selfietl.pipeline.compose import create_render_row, mark_render_failed, render_project
 
 router = APIRouter(tags=["renders"])
+
+TERMINAL_RENDER_STATUSES = {"done", "failed", "cancelled"}
+DEFAULT_CLEANUP_STATUSES = {"failed", "cancelled"}
 
 
 @router.post("/projects/{project_id}/render", response_model=StartJobResponse)
@@ -54,6 +58,24 @@ def history(project_id: int, db: Database = Depends(get_db)):
     return [_render_response(row) for row in rows]
 
 
+@router.delete("/projects/{project_id}/renders")
+def delete_render_history(
+    project_id: int,
+    status: str = Query(default="failed,cancelled", description="Comma-separated render statuses to delete"),
+    delete_files: bool = Query(default=True),
+    delete_cache: bool = Query(default=True),
+    db: Database = Depends(get_db),
+    config: AppConfig = Depends(get_config),
+):
+    statuses = _parse_status_filter(status)
+    _ensure_terminal_statuses(statuses)
+    rows = db.fetchall(
+        "SELECT * FROM renders WHERE project_id = ? AND status IN ({})".format(",".join("?" for _ in statuses)),
+        (project_id, *sorted(statuses)),
+    )
+    return _delete_render_rows(rows, db, config, delete_files=delete_files, delete_cache=delete_cache)
+
+
 @router.get("/renders/{render_id}/file")
 def render_file(render_id: int, db: Database = Depends(get_db)):
     row = db.fetchone("SELECT output_path, status FROM renders WHERE id = ?", (render_id,))
@@ -67,9 +89,28 @@ def render_file(render_id: int, db: Database = Depends(get_db)):
     return FileResponse(path, media_type="video/mp4", filename=path.name)
 
 
+@router.delete("/renders/{render_id}")
+def delete_render(
+    render_id: int,
+    delete_file: bool = Query(default=True),
+    delete_cache: bool = Query(default=True),
+    db: Database = Depends(get_db),
+    config: AppConfig = Depends(get_config),
+):
+    row = db.fetchone("SELECT * FROM renders WHERE id = ?", (render_id,))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Render not found")
+    return _delete_render_rows([row], db, config, delete_files=delete_file, delete_cache=delete_cache)
+
+
 @router.get("/jobs", response_model=list[JobResponse])
 def list_jobs():
     return [JobResponse(**job.public()) for job in runner.list()]
+
+
+@router.delete("/jobs")
+def clear_completed_jobs():
+    return {"ok": True, "deleted": runner.clear_terminal()}
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
@@ -95,6 +136,13 @@ def cancel_job(job_id: str):
     return {"ok": True}
 
 
+@router.delete("/render-cache")
+def clear_render_cache(config: AppConfig = Depends(get_config)):
+    if runner.has_active_jobs():
+        raise HTTPException(status_code=409, detail="The app is busy. Wait for the current job before clearing render cache.")
+    return _clear_render_cache(config)
+
+
 def _render_response(row) -> RenderResponse:
     config = None
     if row["config_json"]:
@@ -112,3 +160,100 @@ def _render_response(row) -> RenderResponse:
         status=row["status"],
         error=row["error"],
     )
+
+
+def _parse_status_filter(value: str) -> set[str]:
+    statuses = {item.strip().lower() for item in value.split(",") if item.strip()}
+    return statuses or set(DEFAULT_CLEANUP_STATUSES)
+
+
+def _ensure_terminal_statuses(statuses: set[str]) -> None:
+    invalid = statuses - TERMINAL_RENDER_STATUSES
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Cannot delete active or unknown render statuses: {', '.join(sorted(invalid))}")
+
+
+def _delete_render_rows(
+    rows: list,
+    db: Database,
+    config: AppConfig,
+    *,
+    delete_files: bool,
+    delete_cache: bool,
+) -> dict:
+    for row in rows:
+        if row["status"] not in TERMINAL_RENDER_STATUSES:
+            raise HTTPException(status_code=409, detail=f"Render {row['id']} is still {row['status']}")
+
+    deleted_files: list[str] = []
+    missing_files: list[str] = []
+    freed_bytes = 0
+    if delete_files:
+        for row in rows:
+            path_text = row["output_path"]
+            if not path_text:
+                continue
+            path = Path(path_text).expanduser()
+            if not path.exists():
+                missing_files.append(str(path))
+                continue
+            if not path.is_file():
+                continue
+            size = path.stat().st_size
+            path.unlink()
+            freed_bytes += size
+            deleted_files.append(str(path))
+
+    deleted_cache_dirs: list[str] = []
+    if delete_cache:
+        for row in rows:
+            cache_dir = config.render_cache_dir / f"render_{int(row['id'])}"
+            if cache_dir.exists():
+                freed_bytes += _path_size(cache_dir)
+                shutil.rmtree(cache_dir, ignore_errors=True)
+                deleted_cache_dirs.append(str(cache_dir))
+
+    ids = [int(row["id"]) for row in rows]
+    if ids:
+        with db.connect() as conn:
+            conn.execute(
+                "DELETE FROM renders WHERE id IN ({})".format(",".join("?" for _ in ids)),
+                tuple(ids),
+            )
+
+    cache_result = _clear_render_cache(config) if delete_cache and not runner.has_active_jobs() else {"deleted_cache_dirs": [], "freed_bytes": 0}
+    deleted_cache_dirs.extend(cache_result["deleted_cache_dirs"])
+    freed_bytes += int(cache_result["freed_bytes"])
+
+    return {
+        "ok": True,
+        "deleted_render_ids": ids,
+        "deleted_files": deleted_files,
+        "missing_files": missing_files,
+        "deleted_cache_dirs": deleted_cache_dirs,
+        "freed_bytes": freed_bytes,
+    }
+
+
+def _clear_render_cache(config: AppConfig) -> dict:
+    deleted_cache_dirs: list[str] = []
+    freed_bytes = 0
+    if not config.render_cache_dir.exists():
+        return {"ok": True, "deleted_cache_dirs": deleted_cache_dirs, "freed_bytes": freed_bytes}
+    for path in config.render_cache_dir.iterdir():
+        if not path.is_dir() or not (path.name.startswith("render_") or path.name.startswith("preview_")):
+            continue
+        freed_bytes += _path_size(path)
+        shutil.rmtree(path, ignore_errors=True)
+        deleted_cache_dirs.append(str(path))
+    return {"ok": True, "deleted_cache_dirs": deleted_cache_dirs, "freed_bytes": freed_bytes}
+
+
+def _path_size(path: Path) -> int:
+    if path.is_file():
+        return path.stat().st_size
+    total = 0
+    for item in path.rglob("*"):
+        if item.is_file():
+            total += item.stat().st_size
+    return total

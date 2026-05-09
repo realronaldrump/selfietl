@@ -92,6 +92,16 @@ export type Render = {
   config: Record<string, unknown> | null;
 };
 
+export type CleanupResult = {
+  ok: boolean;
+  deleted?: number;
+  deleted_render_ids?: number[];
+  deleted_files?: string[];
+  missing_files?: string[];
+  deleted_cache_dirs?: string[];
+  freed_bytes?: number;
+};
+
 export type RenderConfig = {
   alignment_mode: "similarity" | "affine";
   morph_mode: "landmark_delaunay" | "rife" | "none";
@@ -261,9 +271,24 @@ export const api = {
   render: (projectId: number, payload: RenderConfig) =>
     fetchJson<JobStart>(`/api/projects/${projectId}/render`, { method: "POST", body: JSON.stringify(payload) }),
   renders: (projectId: number) => fetchJson<Render[]>(`/api/projects/${projectId}/renders`),
+  deleteRenderHistory: (projectId: number, params: { status?: string; deleteFiles?: boolean; deleteCache?: boolean } = {}) => {
+    const query = new URLSearchParams();
+    query.set("status", params.status ?? "failed,cancelled");
+    query.set("delete_files", String(params.deleteFiles ?? true));
+    query.set("delete_cache", String(params.deleteCache ?? true));
+    return fetchJson<CleanupResult>(`/api/projects/${projectId}/renders?${query.toString()}`, { method: "DELETE" });
+  },
+  deleteRender: (renderId: number, params: { deleteFile?: boolean; deleteCache?: boolean } = {}) => {
+    const query = new URLSearchParams();
+    query.set("delete_file", String(params.deleteFile ?? true));
+    query.set("delete_cache", String(params.deleteCache ?? true));
+    return fetchJson<CleanupResult>(`/api/renders/${renderId}?${query.toString()}`, { method: "DELETE" });
+  },
+  clearRenderCache: () => fetchJson<CleanupResult>("/api/render-cache", { method: "DELETE" }),
   jobs: () => fetchJson<JobStatus[]>("/api/jobs"),
   job: (jobId: string) => fetchJson<JobStatus>(`/api/jobs/${jobId}`),
   cancelJob: (jobId: string) => fetchJson(`/api/jobs/${jobId}`, { method: "DELETE" }),
+  clearCompletedJobs: () => fetchJson<CleanupResult>("/api/jobs", { method: "DELETE" }),
   defaultSource: () => fetchJson<PathResponse>("/api/system/default-source"),
   inboxStatus: () => fetchJson<InboxStatus>("/api/system/inbox-status"),
   revealFolder: (path?: string | null) =>

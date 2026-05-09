@@ -174,17 +174,20 @@ def quick_preview(db: Database, config: AppConfig, project_id: int) -> Path:
     work_dir = config.render_cache_dir / f"preview_{project_id}"
     if work_dir.exists():
         shutil.rmtree(work_dir)
-    frames_dir = work_dir / "frames"
-    frames_dir.mkdir(parents=True, exist_ok=True)
-    for idx, row in enumerate(rows, start=1):
-        source = aligned_path(config, row["hash"])
-        image = Image.open(source).convert("RGB")
-        image.thumbnail((960, 960), Image.Resampling.LANCZOS)
-        image = prepare_frame(image, preview_config, _parse_datetime(row["captured_at"]))
-        _save_frame(frames_dir, idx, image)
-    output = config.exports_dir / f"preview_project_{project_id}.mp4"
-    _run_ffmpeg(frames_dir, output, preview_config, len(rows))
-    return output
+    try:
+        frames_dir = work_dir / "frames"
+        frames_dir.mkdir(parents=True, exist_ok=True)
+        for idx, row in enumerate(rows, start=1):
+            source = aligned_path(config, row["hash"])
+            image = Image.open(source).convert("RGB")
+            image.thumbnail((960, 960), Image.Resampling.LANCZOS)
+            image = prepare_frame(image, preview_config, _parse_datetime(row["captured_at"]))
+            _save_frame(frames_dir, idx, image)
+        output = config.exports_dir / f"preview_project_{project_id}.mp4"
+        _run_ffmpeg(frames_dir, output, preview_config, len(rows))
+        return output
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def prepare_frame(image: Image.Image, render_config: RenderConfig, captured_at: datetime) -> Image.Image:
