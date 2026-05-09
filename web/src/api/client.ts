@@ -110,6 +110,90 @@ export type InboxStatus = {
   needs_detection: boolean;
 };
 
+export type CapturedPhoto = {
+  hash: string;
+  captured_at: string;
+  quality_score: number | null;
+  yaw: number | null;
+  pitch: number | null;
+  roll: number | null;
+  eye_open_ratio: number | null;
+  skipped: boolean;
+  skip_reason: string | null;
+  user_override: boolean;
+  thumb_url: string;
+  image_url: string;
+  aligned_url: string | null;
+  warnings: string[];
+};
+
+export type LatestRender = {
+  id: number;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  output_path: string | null;
+  video_url: string | null;
+};
+
+export type TodayProject = {
+  id: number;
+  name: string | null;
+  source_folder: string;
+  photo_count: number;
+  active_count: number;
+};
+
+export type TodayResponse = {
+  date: string;
+  has_today: boolean;
+  streak: number;
+  longest_streak: number;
+  total_days: number;
+  today_photo: CapturedPhoto | null;
+  latest_render: LatestRender | null;
+  project: TodayProject | null;
+  canonical_ready: boolean;
+};
+
+export type DayPhotosResponse = {
+  date: string;
+  photos: CapturedPhoto[];
+};
+
+export type CalendarDay = {
+  date: string;
+  count: number;
+  has_active: boolean;
+  quality: number | null;
+  thumb_url: string | null;
+  hash: string | null;
+};
+
+export type CalendarResponse = {
+  days: CalendarDay[];
+  start: string;
+  end: string;
+};
+
+export type AutoRenderConfig = {
+  enabled: boolean;
+  time: string;
+  next_run_at: string;
+  last_run_date: string | null;
+  last_render_id: number | null;
+  last_render: LatestRender | null;
+  render_config: Record<string, unknown>;
+  project_id: number | null;
+  scheduler_running: boolean;
+};
+
+export type AutoRenderUpdate = {
+  enabled?: boolean;
+  time?: string;
+  render_config?: Record<string, unknown>;
+};
+
 export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
@@ -156,4 +240,38 @@ export const api = {
     fetchJson<{ ok: boolean; path: string }>("/api/system/reveal", { method: "POST", body: JSON.stringify({ path: path || null }) }),
   pickFolder: () => fetchJson<PathResponse>("/api/system/pick-folder", { method: "POST" }),
   resetAppData: () => fetchJson<{ ok: boolean; inbox_path: string }>("/api/system/reset", { method: "POST", body: JSON.stringify({ confirm: true }) }),
+  today: () => fetchJson<TodayResponse>("/api/today"),
+  capture: (file: File | Blob, capturedAt?: string) => {
+    const form = new FormData();
+    const filename = file instanceof File ? file.name : "selfie.jpg";
+    form.append("file", file, filename);
+    const query = capturedAt ? `?captured_at=${encodeURIComponent(capturedAt)}` : "";
+    return fetch(`/api/capture${query}`, { method: "POST", body: form }).then(async (response) => {
+      if (!response.ok) {
+        let message = `${response.status} ${response.statusText}`;
+        try {
+          const payload = await response.json();
+          message = payload.detail ?? message;
+        } catch {
+          // keep status text
+        }
+        throw new Error(message);
+      }
+      return response.json() as Promise<JobStart>;
+    });
+  },
+  deleteCapture: (hash: string) =>
+    fetchJson<{ hash: string; deleted: boolean }>(`/api/capture/${hash}`, { method: "DELETE" }),
+  photosByDate: (date: string) => fetchJson<DayPhotosResponse>(`/api/photos/by-date/${date}`),
+  calendar: (params: { start?: string; end?: string } = {}) => {
+    const query = new URLSearchParams();
+    if (params.start) query.set("start", params.start);
+    if (params.end) query.set("end", params.end);
+    const suffix = query.toString();
+    return fetchJson<CalendarResponse>(`/api/calendar${suffix ? `?${suffix}` : ""}`);
+  },
+  autoRender: () => fetchJson<AutoRenderConfig>("/api/auto-render"),
+  updateAutoRender: (payload: AutoRenderUpdate) =>
+    fetchJson<AutoRenderConfig>("/api/auto-render", { method: "PATCH", body: JSON.stringify(payload) }),
+  runAutoRenderNow: () => fetchJson<JobStart>("/api/auto-render/run", { method: "POST" }),
 };

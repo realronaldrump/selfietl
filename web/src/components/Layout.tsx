@@ -2,14 +2,20 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   BarChart3,
+  CalendarDays,
+  Camera,
   Check,
   ChevronDown,
   Clock3,
+  Film,
   FolderOpen,
+  Home,
   Images,
   PlaySquare,
   ScanFace,
   Settings2,
+  Smartphone,
+  Sparkles,
   SlidersHorizontal,
   XCircle,
 } from "lucide-react";
@@ -17,15 +23,32 @@ import type { Project } from "@/api/client";
 import { api, type JobStatus } from "@/api/client";
 import { Badge, Button, ProgressBar, cn } from "@/components/ui";
 
-export type PageKey = "setup" | "grid" | "included" | "outliers" | "stats" | "render" | "history";
+export type PageKey =
+  | "today"
+  | "capture"
+  | "timeline"
+  | "video"
+  | "settings"
+  | "setup"
+  | "grid"
+  | "included"
+  | "outliers"
+  | "stats"
+  | "render"
+  | "history";
 
-const navItems: Array<{ key: PageKey; label: string; icon: typeof FolderOpen }> = [
-  { key: "setup", label: "Setup", icon: FolderOpen },
-  { key: "grid", label: "Photos", icon: Images },
-  { key: "outliers", label: "Review", icon: ScanFace },
-  { key: "stats", label: "Details", icon: BarChart3 },
-  { key: "render", label: "Create video", icon: SlidersHorizontal },
-  { key: "history", label: "History", icon: Clock3 },
+const navItems: Array<{ key: PageKey; label: string; icon: typeof FolderOpen; section: "daily" | "admin" }> = [
+  { key: "today", label: "Today", icon: Home, section: "daily" },
+  { key: "capture", label: "Capture", icon: Camera, section: "daily" },
+  { key: "timeline", label: "Timeline", icon: CalendarDays, section: "daily" },
+  { key: "video", label: "Video", icon: Film, section: "daily" },
+  { key: "settings", label: "Auto-render", icon: Sparkles, section: "daily" },
+  { key: "setup", label: "Setup", icon: FolderOpen, section: "admin" },
+  { key: "grid", label: "Photos", icon: Images, section: "admin" },
+  { key: "outliers", label: "Review", icon: ScanFace, section: "admin" },
+  { key: "stats", label: "Details", icon: BarChart3, section: "admin" },
+  { key: "render", label: "Custom render", icon: SlidersHorizontal, section: "admin" },
+  { key: "history", label: "History", icon: Clock3, section: "admin" },
 ];
 
 export function Layout({
@@ -34,6 +57,7 @@ export function Layout({
   currentPage,
   onPageChange,
   onProjectChange,
+  onSwitchToMobile,
   children,
 }: {
   projects: Project[];
@@ -41,6 +65,7 @@ export function Layout({
   currentPage: PageKey;
   onPageChange: (page: PageKey) => void;
   onProjectChange: (id: number) => void;
+  onSwitchToMobile?: () => void;
   children: React.ReactNode;
 }) {
   const jobsQuery = useQuery({ queryKey: ["jobs"], queryFn: api.jobs, refetchInterval: 1200 });
@@ -66,22 +91,58 @@ export function Layout({
         </div>
 
         <nav className="flex gap-1 overflow-x-auto p-2 lg:block lg:p-3">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.key}
-                onClick={() => onPageChange(item.key)}
-                className={cn(
-                  "flex min-h-11 shrink-0 items-center gap-3 rounded-md px-3 text-sm font-bold transition lg:w-full",
-                  isNavActive(currentPage, item.key) ? "bg-paper text-ink" : "text-paper/70 hover:bg-paper/8 hover:text-paper",
-                )}
-              >
-                <Icon className="h-4 w-4" />
-                {item.label}
-              </button>
-            );
-          })}
+          <div className="hidden lg:block">
+            <div className="px-2 pb-1 pt-2 text-[0.62rem] font-black uppercase tracking-[0.16em] text-paper/45">Daily</div>
+          </div>
+          {navItems
+            .filter((item) => item.section === "daily")
+            .map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.key}
+                  onClick={() => onPageChange(item.key)}
+                  className={cn(
+                    "flex min-h-11 shrink-0 items-center gap-3 rounded-md px-3 text-sm font-bold transition lg:w-full",
+                    isNavActive(currentPage, item.key) ? "bg-paper text-ink" : "text-paper/70 hover:bg-paper/8 hover:text-paper",
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                  {item.label}
+                </button>
+              );
+            })}
+          <div className="hidden lg:block">
+            <div className="px-2 pb-1 pt-3 text-[0.62rem] font-black uppercase tracking-[0.16em] text-paper/45">Admin</div>
+          </div>
+          {navItems
+            .filter((item) => item.section === "admin")
+            .map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.key}
+                  onClick={() => onPageChange(item.key)}
+                  className={cn(
+                    "flex min-h-11 shrink-0 items-center gap-3 rounded-md px-3 text-sm font-bold transition lg:w-full",
+                    isNavActive(currentPage, item.key) ? "bg-paper text-ink" : "text-paper/70 hover:bg-paper/8 hover:text-paper",
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                  {item.label}
+                </button>
+              );
+            })}
+          {onSwitchToMobile ? (
+            <button
+              type="button"
+              onClick={onSwitchToMobile}
+              className="hidden min-h-11 w-full items-center gap-3 rounded-md px-3 text-sm font-bold text-paper/55 transition hover:bg-paper/8 hover:text-paper lg:flex"
+            >
+              <Smartphone className="h-4 w-4" />
+              Use mobile layout
+            </button>
+          ) : null}
         </nav>
       </aside>
 
@@ -129,6 +190,7 @@ function pickVisibleJob(jobs: JobStatus[]) {
 
 function isNavActive(currentPage: PageKey, navPage: PageKey) {
   if (navPage === "grid") return currentPage === "grid" || currentPage === "included";
+  if (navPage === "today") return currentPage === "today" || currentPage === "capture";
   return currentPage === navPage;
 }
 

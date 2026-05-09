@@ -112,6 +112,10 @@ class AppConfig(BaseModel):
     def exports_dir(self) -> Path:
         return self.data_dir / "exports"
 
+    @property
+    def inbox_dir(self) -> Path:
+        return self.data_dir / "inbox"
+
     def ensure_dirs(self) -> None:
         for path in [
             self.data_dir,
@@ -121,6 +125,7 @@ class AppConfig(BaseModel):
             self.render_cache_dir,
             self.aligned_dir,
             self.exports_dir,
+            self.inbox_dir,
         ]:
             path.mkdir(parents=True, exist_ok=True)
 

@@ -98,3 +98,77 @@ class RenderResponse(BaseModel):
     finished_at: datetime | str | None = None
     status: str
     error: str | None = None
+
+
+class CapturedPhoto(BaseModel):
+    hash: str
+    captured_at: datetime | str
+    quality_score: float | None = None
+    yaw: float | None = None
+    pitch: float | None = None
+    roll: float | None = None
+    eye_open_ratio: float | None = None
+    skipped: bool = False
+    skip_reason: str | None = None
+    user_override: bool = False
+    thumb_url: str
+    image_url: str
+    aligned_url: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class TodayProjectSummary(BaseModel):
+    id: int
+    name: str | None = None
+    source_folder: str
+    photo_count: int
+    active_count: int
+
+
+class LatestRender(BaseModel):
+    id: int
+    status: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    output_path: str | None = None
+    video_url: str | None = None
+
+
+class TodayResponse(BaseModel):
+    date: str
+    has_today: bool
+    streak: int
+    longest_streak: int
+    total_days: int
+    today_photo: CapturedPhoto | None = None
+    latest_render: LatestRender | None = None
+    project: TodayProjectSummary | None = None
+    canonical_ready: bool = False
+
+
+class DayPhotosResponse(BaseModel):
+    date: str
+    photos: list[CapturedPhoto]
+
+
+class CaptureResponse(BaseModel):
+    hash: str
+    deleted: bool = False
+
+
+class UpdateAutoRenderRequest(BaseModel):
+    enabled: bool | None = None
+    time: str | None = None
+    render_config: dict[str, Any] | None = None
+
+
+class AutoRenderResponse(BaseModel):
+    enabled: bool
+    time: str
+    next_run_at: str
+    last_run_date: str | None = None
+    last_render_id: int | None = None
+    last_render: LatestRender | None = None
+    render_config: dict[str, Any]
+    project_id: int | None = None
+    scheduler_running: bool = False

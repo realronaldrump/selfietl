@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -7,15 +9,28 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from selfietl.api import photos, projects, renders, system
+from selfietl.api import auto_render, capture, photos, projects, renders, system
 from selfietl.config import AppConfig, load_config
 from selfietl.db import Database
+from selfietl.scheduler import AutoRenderScheduler
 
 
 def create_app(config: AppConfig | None = None) -> FastAPI:
     config = config or load_config()
     db = Database(config.db_path)
-    app = FastAPI(title="SelfieTL", version="0.1.0")
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        scheduler = AutoRenderScheduler(db, config)
+        await scheduler.start()
+        app.state.auto_render_scheduler = scheduler
+        try:
+            yield
+        finally:
+            await scheduler.stop()
+            app.state.auto_render_scheduler = None
+
+    app = FastAPI(title="SelfieTL", version="0.2.0", lifespan=lifespan)
     app.state.config = config
     app.state.db = db
 
@@ -31,6 +46,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(photos.router, prefix="/api")
     app.include_router(renders.router, prefix="/api")
     app.include_router(system.router, prefix="/api")
+    app.include_router(capture.router, prefix="/api")
+    app.include_router(auto_render.router, prefix="/api")
 
     @app.get("/api/health")
     def health():
@@ -63,4 +80,5 @@ def _web_dist() -> Path:
     return Path(__file__).resolve().parents[1] / "web" / "dist"
 
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 app = create_app()
