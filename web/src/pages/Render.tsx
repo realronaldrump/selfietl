@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Clapperboard, Eye, Film, Play, SlidersHorizontal, XCircle } from "lucide-react";
 import { api, type JobStatus, type Project, type RenderConfig } from "@/api/client";
 import { JobStatus as JobStatusPanel } from "@/components/JobStatus";
-import { Button, Input, Label, Panel, Select, cn } from "@/components/ui";
+import { Button, Input, Label, PageFrame, Panel, Select, cn } from "@/components/ui";
 import { useJobEvents } from "@/hooks/useJobEvents";
 
 const defaultConfig: RenderConfig = {
@@ -130,7 +130,7 @@ export function Render({ project }: { project: Project }) {
   }
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_24rem]">
+    <PageFrame size="wide" className="grid gap-4 space-y-0 xl:grid-cols-[minmax(0,1fr)_24rem]">
       <Panel>
         <div className="flex items-center gap-2">
           <Film className="h-5 w-5 text-teal" />
@@ -380,7 +380,7 @@ export function Render({ project }: { project: Project }) {
       <div className="xl:col-span-2">
         <JobStatusPanel job={visibleJob} onCancel={visibleJob ? () => api.cancelJob(visibleJob.id) : undefined} />
       </div>
-    </div>
+    </PageFrame>
   );
 }
 

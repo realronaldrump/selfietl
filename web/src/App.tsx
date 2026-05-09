@@ -48,7 +48,7 @@ export default function App() {
 }
 
 function MobileApp({ onSwitchToDesktop }: { onSwitchToDesktop: () => void }) {
-  const [page, setPage] = useState<MobilePage>("today");
+  const [page, setPage] = useState<MobilePage>(() => initialPageFromUrl("today"));
 
   function handleTodayAction(action: TodayPageAction) {
     if (action === "capture") return setPage("capture");
@@ -176,7 +176,7 @@ function BackHeader({ title, onBack }: { title: string; onBack: () => void }) {
 }
 
 function DesktopApp({ onSwitchToMobile }: { onSwitchToMobile: () => void }) {
-  const [page, setPage] = useState<PageKey>("today");
+  const [page, setPage] = useState<PageKey>(() => initialPageFromUrl("today") as PageKey);
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(() => {
     const stored = localStorage.getItem(PROJECT_KEY);
     return stored ? Number(stored) : null;
@@ -241,4 +241,12 @@ function DesktopApp({ onSwitchToMobile }: { onSwitchToMobile: () => void }) {
       {content}
     </Layout>
   );
+}
+
+function initialPageFromUrl(fallback: MobilePage): MobilePage {
+  const action = new URLSearchParams(window.location.search).get("action");
+  if (action === "capture") return "capture";
+  if (action === "video") return "video";
+  if (action === "timeline") return "timeline";
+  return fallback;
 }

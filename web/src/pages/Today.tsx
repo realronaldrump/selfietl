@@ -12,7 +12,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { api, type TodayResponse } from "@/api/client";
-import { Badge, Button, Panel, cn } from "@/components/ui";
+import { Badge, Button, PageFrame, Panel, cn } from "@/components/ui";
 
 export type TodayPageAction = "capture" | "video" | "timeline" | "settings" | "review";
 
@@ -37,7 +37,7 @@ export function Today({ onAction }: { onAction: (action: TodayPageAction) => voi
   const captureLabel = hasToday ? "Retake today" : "Take today's selfie";
 
   return (
-    <div className="space-y-4">
+    <PageFrame size="phone">
       <header>
         <div className="text-xs font-bold uppercase tracking-[0.18em] text-ink/55">{greeting}</div>
         <h1 className="mt-1 text-3xl font-black tracking-tight text-ink">{todayLabel}</h1>
@@ -187,7 +187,7 @@ export function Today({ onAction }: { onAction: (action: TodayPageAction) => voi
       </Panel>
 
       <BackgroundChecklist today={today} />
-    </div>
+    </PageFrame>
   );
 }
 
@@ -339,6 +339,7 @@ function humanSkipReason(reason: string | null) {
     low_quality: "The frame did not pass quality checks",
     landmark_outlier: "Frame is far from the average face",
     user_skipped: "You marked this not included",
+    replaced_by_newer_capture: "A newer take replaced this one",
   };
   return labels[reason] ?? "Needs review";
 }

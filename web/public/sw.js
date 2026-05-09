@@ -2,7 +2,7 @@
  * Caches the app shell for fast launches when used as a Home Screen app.
  * Always bypasses the cache for /api/* so dynamic data is fresh.
  */
-const SHELL_CACHE = "selfietl-shell-v1";
+const SHELL_CACHE = "selfietl-shell-v2";
 const SHELL_FILES = [
   "/",
   "/index.html",

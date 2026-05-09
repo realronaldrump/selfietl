@@ -9,7 +9,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { api, type CalendarDay, type CapturedPhoto } from "@/api/client";
-import { Badge, Button, Panel, cn } from "@/components/ui";
+import { Badge, Button, PageFrame, Panel, cn } from "@/components/ui";
 
 export function Timeline() {
   const today = useMemo(() => new Date(), []);
@@ -28,7 +28,7 @@ export function Timeline() {
   const dayMap = useMemo(() => new Map(days.map((d) => [d.date, d])), [days]);
 
   return (
-    <div className="space-y-4">
+    <PageFrame size="narrow">
       <header>
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-black tracking-tight text-ink">Timeline</h1>
@@ -71,7 +71,7 @@ export function Timeline() {
           loading={calendarQuery.isLoading}
         />
       )}
-    </div>
+    </PageFrame>
   );
 }
 
@@ -195,7 +195,7 @@ function DaySheet({ day, onClose }: { day: string; onClose: () => void }) {
     queryFn: () => api.photosByDate(day),
   });
   const photos = dayQuery.data?.photos ?? [];
-  const photo = photos[photos.length - 1];
+  const photo = primaryPhotoForDay(photos);
 
   const includeMutation = useMutation({
     mutationFn: ({ hash, skipped }: { hash: string; skipped: boolean }) =>
@@ -311,7 +311,7 @@ function DayPhotoView({
         <Button
           variant="ghost"
           onClick={() => {
-            if (window.confirm("Delete this selfie? This removes it from the catalog and inbox.")) {
+            if (window.confirm("Delete this selfie from the app catalog? App-owned inbox files are removed; external source photos are left on disk.")) {
               onDelete();
             }
           }}
@@ -386,4 +386,11 @@ function formatLongDate(value: string) {
 
 function fmt(value: number | null | undefined) {
   return value == null ? "–" : value.toFixed(2);
+}
+
+function primaryPhotoForDay(photos: CapturedPhoto[]) {
+  for (let index = photos.length - 1; index >= 0; index -= 1) {
+    if (!photos[index].skipped) return photos[index];
+  }
+  return photos[photos.length - 1];
 }

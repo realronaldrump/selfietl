@@ -10,7 +10,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { api, type JobStatus } from "@/api/client";
-import { Badge, Button, Panel, ProgressBar, cn } from "@/components/ui";
+import { Badge, Button, PageFrame, Panel, ProgressBar, cn } from "@/components/ui";
 import { useJobEvents } from "@/hooks/useJobEvents";
 
 type CaptureStep = "pick" | "preview" | "uploading" | "result";
@@ -56,6 +56,7 @@ export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => 
     quality_score?: number | null;
     aligned?: boolean;
     duplicate_of?: string | null;
+    replaced_count?: number | null;
   };
 
   const captureMutation = useMutation({
@@ -90,7 +91,7 @@ export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => 
   const filename = useMemo(() => selected?.name ?? "selfie.jpg", [selected]);
 
   return (
-    <div className="space-y-4">
+    <PageFrame size="phone">
       <div className="flex items-center justify-between">
         <Button size="sm" variant="ghost" onClick={onBack}>
           <ArrowLeft className="h-4 w-4" />
@@ -160,7 +161,7 @@ export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => 
           error={error}
         />
       ) : null}
-    </div>
+    </PageFrame>
   );
 }
 
@@ -305,7 +306,7 @@ function ResultStep({
 }: {
   previewUrl: string;
   job: JobStatus | null;
-  result: { skipped?: boolean; skip_reason?: string | null; quality_score?: number | null; aligned?: boolean; duplicate_of?: string | null } | null;
+  result: { skipped?: boolean; skip_reason?: string | null; quality_score?: number | null; aligned?: boolean; duplicate_of?: string | null; replaced_count?: number | null } | null;
   onRetake: () => void;
   onDone: () => void;
   error: string | null;
@@ -356,6 +357,7 @@ function ResultStep({
               {result?.quality_score != null ? <Badge tone="good">Quality {result.quality_score.toFixed(2)}</Badge> : null}
               {result?.aligned ? <Badge>Aligned</Badge> : <Badge tone="warn">Will align overnight</Badge>}
               {result?.duplicate_of ? <Badge tone="warn">Duplicate of older photo</Badge> : null}
+              {result?.replaced_count ? <Badge tone="good">Replaced earlier take</Badge> : null}
             </div>
             <div className="mt-4 grid grid-cols-1 gap-2">
               <Button onClick={onDone}>Done</Button>
@@ -451,6 +453,7 @@ function humanSkipReason(reason: string | null | undefined) {
     low_quality: "The frame did not pass the quality check",
     landmark_outlier: "Frame is far from the average face",
     user_skipped: "Manually marked as not included",
+    replaced_by_newer_capture: "Replaced by a newer take",
   };
   return labels[reason] ?? reason;
 }

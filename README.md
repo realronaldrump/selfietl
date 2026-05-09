@@ -10,7 +10,7 @@ source .venv/bin/activate
 pip install -e ".[full,dev]"
 
 cd web
-npm install
+npm ci
 npm run build
 cd ..
 

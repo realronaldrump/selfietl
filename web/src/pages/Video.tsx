@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Clock, Film, Pause, Play, Settings, XCircle } from "lucide-react";
 import { api, type AutoRenderConfig, type JobStatus, type Render } from "@/api/client";
-import { Badge, Button, Panel, ProgressBar, cn } from "@/components/ui";
+import { Badge, Button, PageFrame, Panel, ProgressBar, cn } from "@/components/ui";
 import { useJobEvents } from "@/hooks/useJobEvents";
 
 export function Video({ onSettings }: { onSettings: () => void }) {
@@ -38,7 +38,7 @@ export function Video({ onSettings }: { onSettings: () => void }) {
   const renders = rendersQuery.data ?? [];
 
   return (
-    <div className="space-y-4">
+    <PageFrame size="narrow">
       <header>
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-black tracking-tight text-ink">Video</h1>
@@ -118,7 +118,7 @@ export function Video({ onSettings }: { onSettings: () => void }) {
           </div>
         )}
       </Panel>
-    </div>
+    </PageFrame>
   );
 }
 
@@ -130,11 +130,13 @@ function AutoSummary({ auto, onSettings }: { auto: AutoRenderConfig | undefined;
           <div className="flex items-center gap-2">
             {auto?.enabled ? <Badge tone="good">Auto-render on</Badge> : <Badge tone="warn">Paused</Badge>}
             {auto?.scheduler_running ? <Badge tone="good">Scheduler live</Badge> : null}
+            {auto?.last_error ? <Badge tone="bad">Last failed</Badge> : null}
           </div>
           <div className="mt-1 text-sm font-semibold text-ink/65">
             {auto?.enabled ? `Runs daily at ${formatTimeLabel(auto.time)}` : "Manual only until you turn it back on"}
           </div>
           {auto ? <div className="mt-1 text-xs font-semibold text-ink/45">Next: {formatNextRun(auto.next_run_at)}</div> : null}
+          {auto?.last_error ? <div className="mt-1 max-w-md text-xs font-semibold text-coral">{auto.last_error}</div> : null}
         </div>
         <Button size="sm" variant="ghost" onClick={onSettings}>
           <Settings className="h-4 w-4" />

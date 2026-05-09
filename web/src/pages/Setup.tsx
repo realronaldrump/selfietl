@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, ChevronDown, FolderOpen, FolderPlus, MousePointer2, Play, Radar, RotateCcw, ScanFace } from "lucide-react";
 import { api, type InboxStatus, type JobStatus, type Project } from "@/api/client";
 import { JobStatus as JobStatusPanel } from "@/components/JobStatus";
-import { Badge, Button, Input, Label, Metric, Panel } from "@/components/ui";
+import { Badge, Button, Input, Label, Metric, PageFrame, Panel } from "@/components/ui";
 import { useJobEvents } from "@/hooks/useJobEvents";
 
 export function Setup({
@@ -241,7 +241,7 @@ export function Setup({
   }
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_24rem]">
+    <PageFrame size="wide" className="grid gap-4 space-y-0 xl:grid-cols-[minmax(0,1fr)_24rem]">
       <Panel>
         <div className="flex items-center gap-2">
           <FolderOpen className="h-5 w-5 text-teal" />
@@ -364,7 +364,7 @@ export function Setup({
       <div className="xl:col-span-2">
         <JobStatusPanel job={job} onCancel={jobId ? () => api.cancelJob(jobId) : undefined} />
       </div>
-    </div>
+    </PageFrame>
   );
 }
 

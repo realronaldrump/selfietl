@@ -20,10 +20,21 @@ def test_next_run_at_uses_today_when_time_has_not_passed():
     assert target == datetime(2026, 5, 8, 3, 0, 0)
 
 
-def test_next_run_at_rolls_over_after_target_time():
+def test_next_run_at_catches_up_after_target_time_when_not_run_today():
     now = datetime(2026, 5, 8, 5, 30, 0)
     target = next_run_at(now, "03:00", last_run_date=None)
-    assert target == datetime(2026, 5, 9, 3, 0, 0)
+    assert target == now
+
+
+def test_next_run_at_waits_before_retrying_recent_failed_attempt():
+    now = datetime(2026, 5, 8, 5, 30, 0)
+    target = next_run_at(
+        now,
+        "03:00",
+        last_run_date=None,
+        last_attempt_at="2026-05-08 05:00:00",
+    )
+    assert target == datetime(2026, 5, 8, 6, 0, 0)
 
 
 def test_next_run_at_skips_to_tomorrow_after_run_today():
@@ -110,6 +121,8 @@ def test_streak_counts_yesterday_when_today_missing():
         time="03:00",
         last_run_date=None,
         last_render_id=None,
+        last_attempt_at=None,
+        last_error=None,
         render_config={},
     )
     assert settings.enabled is True

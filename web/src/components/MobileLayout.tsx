@@ -4,6 +4,7 @@ import { api, type JobStatus } from "@/api/client";
 import { Button, ProgressBar, cn } from "@/components/ui";
 
 export type MobileTab = "today" | "timeline" | "video" | "more";
+export type MobileNavTarget = MobileTab | "capture";
 
 export function MobileLayout({
   active,
@@ -11,7 +12,7 @@ export function MobileLayout({
   children,
 }: {
   active: MobileTab | "capture" | "settings";
-  onChange: (tab: MobileTab) => void;
+  onChange: (tab: MobileNavTarget) => void;
   children: React.ReactNode;
 }) {
   const jobsQuery = useQuery({ queryKey: ["jobs"], queryFn: api.jobs, refetchInterval: 1500 });
@@ -27,7 +28,7 @@ export function MobileLayout({
         className="fixed inset-x-0 bottom-0 z-30 border-t border-ink/10 bg-paper/95 backdrop-blur"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
-        <div className="mx-auto grid max-w-screen-sm grid-cols-4">
+        <div className="mx-auto grid max-w-screen-sm grid-cols-5">
           <TabButton active={isTabActive(active, "today")} icon={<Home className="h-5 w-5" />} label="Today" onClick={() => onChange("today")} />
           <TabButton
             active={isTabActive(active, "timeline")}
@@ -35,8 +36,14 @@ export function MobileLayout({
             label="Timeline"
             onClick={() => onChange("timeline")}
           />
-          <CaptureTabButton active={active === "capture"} onClick={() => onChange("today")} />
+          <CaptureTabButton active={active === "capture"} onClick={() => onChange("capture")} />
           <TabButton active={isTabActive(active, "video")} icon={<Film className="h-5 w-5" />} label="Video" onClick={() => onChange("video")} />
+          <TabButton
+            active={isTabActive(active, "more")}
+            icon={<MoreHorizontal className="h-5 w-5" />}
+            label="More"
+            onClick={() => onChange("more")}
+          />
         </div>
       </nav>
     </div>

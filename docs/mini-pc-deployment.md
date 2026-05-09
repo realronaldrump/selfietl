@@ -23,6 +23,10 @@ sudo journalctl -u selfietl.service -f
 Deployment command:
 
 ```bash
+cd /home/davis/selfietl/web
+npm ci
+npm run build
+cd /home/davis/selfietl
 /home/davis/selfietl/.venv/bin/python -m selfietl serve --host 0.0.0.0 --port 8766 --data-dir /home/davis/.selfietl
 ```
 
@@ -49,6 +53,8 @@ When the scheduler fires it:
 1. Recomputes the canonical face from all included frames.
 2. Re-aligns every active photo to the new canonical (`force=True`).
 3. Renders the timelapse with the saved render config.
+
+The scheduler records a day as complete only after the MP4 finishes successfully. If the mini PC was offline at the scheduled time, or a build fails, it will catch up after startup and retry later instead of silently skipping the day.
 
 Trigger an immediate render from the UI's *Render now* button or via:
 

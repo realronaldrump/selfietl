@@ -16,6 +16,7 @@ from selfietl.pipeline.canonical import compute_canonical_face
 from selfietl.pipeline.compose import create_render_row, mark_render_failed, render_project
 
 DEFAULT_RENDER_TIME = "03:00"
+AUTO_RENDER_RETRY_DELAY = timedelta(minutes=60)
 DEFAULT_RENDER_CONFIG = {
     "morph_mode": "landmark_delaunay",
     "intermediate_frames": 4,
@@ -45,6 +46,8 @@ class AutoRenderSettings:
     time: str
     last_run_date: str | None
     last_render_id: int | None
+    last_attempt_at: str | None
+    last_error: str | None
     render_config: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
@@ -53,6 +56,8 @@ class AutoRenderSettings:
             "time": self.time,
             "last_run_date": self.last_run_date,
             "last_render_id": self.last_render_id,
+            "last_attempt_at": self.last_attempt_at,
+            "last_error": self.last_error,
             "render_config": self.render_config,
         }
 
@@ -67,6 +72,8 @@ def default_settings() -> AutoRenderSettings:
         time=DEFAULT_RENDER_TIME,
         last_run_date=None,
         last_render_id=None,
+        last_attempt_at=None,
+        last_error=None,
         render_config=dict(DEFAULT_RENDER_CONFIG),
     )
 
@@ -103,11 +110,17 @@ def parse_time(text: str) -> time:
     return time(hour=hour, minute=minute)
 
 
-def next_run_at(now: datetime, target_time_text: str, last_run_date: str | None) -> datetime:
+def next_run_at(
+    now: datetime,
+    target_time_text: str,
+    last_run_date: str | None,
+    last_attempt_at: str | None = None,
+) -> datetime:
     """Compute the next datetime the auto-render should fire.
 
-    If today's run already happened (or the time has passed today and today's run did),
-    schedule for the next day.
+    If today's run already finished, schedule tomorrow. If the target time was
+    missed and no successful run is recorded, return an immediate catch-up time
+    unless a recent attempt is still inside the retry window.
     """
     target = parse_time(target_time_text)
     today_target = datetime.combine(now.date(), target)
@@ -116,7 +129,12 @@ def next_run_at(now: datetime, target_time_text: str, last_run_date: str | None)
         return datetime.combine(now.date() + timedelta(days=1), target)
     if now < today_target:
         return today_target
-    return datetime.combine(now.date() + timedelta(days=1), target)
+    last_attempt = _parse_settings_datetime(last_attempt_at)
+    if last_attempt and last_attempt.date() == now.date():
+        retry_at = last_attempt + AUTO_RENDER_RETRY_DELAY
+        if retry_at > now:
+            return retry_at
+    return now
 
 
 def primary_project_id(db: Database, config: AppConfig) -> int | None:
@@ -151,6 +169,8 @@ def kick_off_auto_render(
 ) -> tuple[str, int]:
     render_config = render_config_from_settings(settings)
     render_id = create_render_row(db, project_id, render_config)
+    attempt_at = datetime.now()
+    run_date = attempt_at.date().isoformat()
 
     def work(progress, cancel_check):
         try:
@@ -164,15 +184,24 @@ def kick_off_auto_render(
                 force=True,
                 cancel_check=cancel_check,
             )
-            return render_project(db, config, project_id, render_config, render_id, progress, cancel_check)
+            result = render_project(db, config, project_id, render_config, render_id, progress, cancel_check)
+            _record_auto_render_success(config, render_id, run_date)
+            return result
         except CancellationRequested as exc:
             mark_render_failed(db, render_id, str(exc), status="cancelled")
+            _record_auto_render_error(config, render_id, str(exc))
             raise
         except Exception as exc:
             mark_render_failed(db, render_id, f"{exc.__class__.__name__}: {exc}", status="failed")
+            _record_auto_render_error(config, render_id, f"{exc.__class__.__name__}: {exc}")
             raise
 
-    job = runner.start(job_name or f"auto_render:{render_id}", work)
+    try:
+        job = runner.start(job_name or f"auto_render:{render_id}", work)
+    except Exception:
+        mark_render_failed(db, render_id, "Auto-render job could not be started", status="cancelled")
+        raise
+    _record_auto_render_attempt(config, render_id, attempt_at)
     return job.id, render_id
 
 
@@ -209,7 +238,7 @@ class AutoRenderScheduler:
                 if not settings.enabled:
                     await self._wait(min_seconds=60, max_seconds=300)
                     continue
-                next_run = next_run_at(datetime.now(), settings.time, settings.last_run_date)
+                next_run = next_run_at(datetime.now(), settings.time, settings.last_run_date, settings.last_attempt_at)
                 wait_seconds = max(1.0, (next_run - datetime.now()).total_seconds())
                 logger.info(
                     "Auto-render scheduled for %s (in %.0f minutes)",
@@ -222,7 +251,7 @@ class AutoRenderScheduler:
                 if not settings.enabled:
                     continue
                 now = datetime.now()
-                if now < next_run_at(now, settings.time, settings.last_run_date) - timedelta(seconds=30):
+                if now < next_run_at(now, settings.time, settings.last_run_date, settings.last_attempt_at) - timedelta(seconds=30):
                     # We woke early; the time has been moved. Loop again.
                     continue
                 if settings.last_run_date == now.date().isoformat():
@@ -238,14 +267,15 @@ class AutoRenderScheduler:
                     settings.last_run_date = now.date().isoformat()
                     save_settings(self.config, settings)
                     continue
+                if runner.has_active_jobs():
+                    logger.info("Auto-render delayed: another job is active")
+                    await self._wait(min_seconds=300, max_seconds=300)
+                    continue
                 try:
-                    _job_id, render_id = kick_off_auto_render(self.db, self.config, project_id, settings)
+                    _job_id, _render_id = kick_off_auto_render(self.db, self.config, project_id, settings)
                 except Exception as exc:
                     logger.exception("Auto-render kickoff failed: %s", exc)
                     continue
-                settings.last_run_date = now.date().isoformat()
-                settings.last_render_id = render_id
-                save_settings(self.config, settings)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -272,6 +302,38 @@ def _project_has_active_photos(db: Database, project_id: int) -> bool:
         (project_id,),
     )
     return bool(row and int(row["n"] or 0) > 0)
+
+
+def _record_auto_render_attempt(config: AppConfig, render_id: int, attempt_at: datetime) -> None:
+    settings = load_settings(config)
+    settings.last_render_id = render_id
+    settings.last_attempt_at = attempt_at.isoformat(sep=" ", timespec="seconds")
+    settings.last_error = None
+    save_settings(config, settings)
+
+
+def _record_auto_render_success(config: AppConfig, render_id: int, run_date: str) -> None:
+    settings = load_settings(config)
+    settings.last_run_date = run_date
+    settings.last_render_id = render_id
+    settings.last_error = None
+    save_settings(config, settings)
+
+
+def _record_auto_render_error(config: AppConfig, render_id: int, error: str) -> None:
+    settings = load_settings(config)
+    settings.last_render_id = render_id
+    settings.last_error = error
+    save_settings(config, settings)
+
+
+def _parse_settings_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def streak_summary(db: Database, project_id: int, today: date | None = None) -> dict[str, Any]:

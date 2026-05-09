@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, SkipBack, SkipForward } from "lucide-react";
 import { api, fetchJson, type Photo, type Project } from "@/api/client";
-import { Badge, Button, Panel, ProgressBar, cn } from "@/components/ui";
+import { Badge, Button, PageFrame, Panel, ProgressBar, cn } from "@/components/ui";
 
 type GridMode = "all" | "included";
 
@@ -38,7 +38,7 @@ export function Grid({ project, mode = "all" }: { project: Project; mode?: GridM
   }, [project.id, mode]);
 
   return (
-    <div className="space-y-4">
+    <PageFrame size="wide">
       <Panel className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-xl font-black text-ink">{pageTitle}</h2>
@@ -78,7 +78,7 @@ export function Grid({ project, mode = "all" }: { project: Project; mode?: GridM
         ))}
       </div>
       {selected ? <PhotoModal photo={selected} onClose={() => setSelected(null)} /> : null}
-    </div>
+    </PageFrame>
   );
 }
 

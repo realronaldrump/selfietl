@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { BarChart3, FolderOpen, Images, Monitor, Sparkles, ScanFace, SlidersHorizontal } from "lucide-react";
 import { api } from "@/api/client";
-import { Badge, Panel } from "@/components/ui";
+import { Badge, PageFrame, Panel } from "@/components/ui";
 import { MoreLink } from "@/components/MobileLayout";
 
 export type MoreTarget = "setup" | "render" | "review" | "stats" | "history" | "grid" | "auto-render-settings";
@@ -11,7 +11,7 @@ export function More({ onNavigate, onSwitchToDesktop }: { onNavigate: (target: M
   const today = todayQuery.data;
 
   return (
-    <div className="space-y-4">
+    <PageFrame size="narrow">
       <header>
         <h1 className="text-2xl font-black tracking-tight text-ink">More</h1>
         <p className="mt-1 text-sm font-semibold text-ink/55">Admin tools and detailed views.</p>
@@ -87,6 +87,6 @@ export function More({ onNavigate, onSwitchToDesktop }: { onNavigate: (target: M
           {today?.project ? <Badge>{today.project.active_count}/{today.project.photo_count} included</Badge> : null}
         </div>
       </Panel>
-    </div>
+    </PageFrame>
   );
 }

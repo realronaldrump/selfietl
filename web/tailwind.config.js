@@ -6,8 +6,8 @@ export default {
       colors: {
         ink: "#111412",
         graphite: "#202522",
-        bone: "#F4F0E7",
-        paper: "#FBF8EF",
+        bone: "#EEF1ED",
+        paper: "#FCFCF8",
         teal: "#1F7A75",
         coral: "#C94F31",
         amber: "#C59A2D",

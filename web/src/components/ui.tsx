@@ -43,6 +43,24 @@ export function Panel({ className, children }: { className?: string; children: R
   return <section className={cn("rounded-lg bg-paper p-4 shadow-line", className)}>{children}</section>;
 }
 
+export function PageFrame({
+  children,
+  className,
+  size = "wide",
+}: {
+  children: ReactNode;
+  className?: string;
+  size?: "phone" | "narrow" | "wide" | "full";
+}) {
+  const sizes = {
+    phone: "max-w-screen-sm",
+    narrow: "max-w-4xl",
+    wide: "max-w-7xl",
+    full: "max-w-none",
+  };
+  return <div className={cn("mx-auto w-full space-y-4", sizes[size], className)}>{children}</div>;
+}
+
 export function Label({ children }: { children: ReactNode }) {
   return <label className="text-xs font-bold uppercase tracking-[0.08em] text-ink/60">{children}</label>;
 }

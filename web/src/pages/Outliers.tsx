@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Eye, Gauge, RotateCcw, ShieldAlert, XCircle } from "lucide-react";
 import { api, type Photo, type Project } from "@/api/client";
-import { Badge, Button, Panel, cn } from "@/components/ui";
+import { Badge, Button, PageFrame, Panel, cn } from "@/components/ui";
 
 const QUALITY_THRESHOLD = 0.6;
 const MAX_YAW = 25;
@@ -47,7 +47,7 @@ export function Outliers({ project }: { project: Project }) {
   const items = photosQuery.data?.items ?? [];
 
   return (
-    <div className="space-y-4">
+    <PageFrame size="wide">
       <Panel className="overflow-hidden p-0">
         <div className="grid gap-0 lg:grid-cols-[1fr_18rem]">
           <div className="p-5">
@@ -87,7 +87,7 @@ export function Outliers({ project }: { project: Project }) {
           ))}
         </div>
       )}
-    </div>
+    </PageFrame>
   );
 }
 
@@ -286,6 +286,15 @@ function explainReview(photo: Photo): ReviewExplanation {
     });
   }
 
+  if (reason === "replaced_by_newer_capture") {
+    issues.push({
+      kind: "manual",
+      title: "Daily replacement",
+      value: "Older take",
+      detail: "A newer selfie from the same day is active, so this earlier take is held out of the video.",
+    });
+  }
+
   if (issues.length === 0) {
     issues.push({
       kind: "score",
@@ -346,6 +355,7 @@ function humanReason(reason: string) {
     low_quality: "Low face score",
     landmark_outlier: "Face map drift",
     user_skipped: "Manually not included",
+    replaced_by_newer_capture: "Replaced by newer take",
     review: "Needs review",
   };
   return labels[reason] ?? reason.replace(/_/g, " ");

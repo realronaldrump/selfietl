@@ -1,13 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { Clipboard, Film } from "lucide-react";
 import { api, type Project, type Render } from "@/api/client";
-import { Badge, Button, Panel } from "@/components/ui";
+import { Badge, Button, PageFrame, Panel } from "@/components/ui";
 
 export function History({ project }: { project: Project }) {
   const rendersQuery = useQuery({ queryKey: ["renders", project.id], queryFn: () => api.renders(project.id) });
   const renders = rendersQuery.data ?? [];
   return (
-    <div className="space-y-4">
+    <PageFrame size="narrow">
       <Panel>
         <h2 className="text-xl font-black text-ink">Video history</h2>
         <p className="mt-1 text-sm font-medium text-ink/55">Finished MP4 files stay on disk. This page keeps the path so you can find them again.</p>
@@ -21,7 +21,7 @@ export function History({ project }: { project: Project }) {
           ))}
         </div>
       )}
-    </div>
+    </PageFrame>
   );
 }
 

@@ -209,9 +209,18 @@ def _active_rows(db: Database, project_id: int, render_config: RenderConfig | No
         """,
         (project_id,),
     )
-    if render_config is None:
-        return rows
-    return _filter_rows_by_date(rows, render_config.start_date, render_config.end_date)
+    if render_config is not None:
+        rows = _filter_rows_by_date(rows, render_config.start_date, render_config.end_date)
+    return _latest_row_per_day(rows)
+
+
+def _latest_row_per_day(rows: list) -> list:
+    """Collapse multiple active captures on the same local date to the latest one."""
+    by_day = {}
+    for row in rows:
+        captured = _parse_datetime(row["captured_at"])
+        by_day[captured.date().isoformat()] = row
+    return [by_day[day] for day in sorted(by_day)]
 
 
 def _filter_rows_by_date(rows: list, start_date: str | None, end_date: str | None) -> list:

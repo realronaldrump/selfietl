@@ -4,7 +4,11 @@ from pathlib import Path
 from PIL import Image
 
 from selfietl.config import load_config
-from selfietl.pipeline.single import discard_photo, import_to_inbox
+from selfietl.pipeline.single import (
+    _mark_other_active_captures_for_day,
+    discard_photo,
+    import_to_inbox,
+)
 
 
 def _make_jpeg(tmp_path: Path) -> bytes:
@@ -73,6 +77,68 @@ def test_discard_photo_removes_files_and_row(tmp_path: Path):
     assert not photo_path.exists()
     assert not thumb.exists()
     assert db.fetchone("SELECT * FROM photos WHERE hash = ?", (photo_hash,)) is None
+
+
+def test_discard_photo_preserves_original_outside_inbox(tmp_path: Path):
+    config = load_config(tmp_path / "home")
+    from selfietl.db import Database
+
+    db = Database(config.db_path)
+    photo_hash = "external123"
+    photo_path = tmp_path / "camera-roll" / "selfie.jpg"
+    photo_path.parent.mkdir(parents=True, exist_ok=True)
+    photo_path.write_bytes(b"original")
+    thumb = config.thumbs_dir / f"{photo_hash}.jpg"
+    thumb.parent.mkdir(parents=True, exist_ok=True)
+    thumb.write_bytes(b"thumb")
+    db.execute(
+        "INSERT INTO photos (hash, path, captured_at) VALUES (?, ?, ?)",
+        (photo_hash, str(photo_path), "2026-05-08 12:00:00"),
+    )
+
+    deleted = discard_photo(db, config, photo_hash)
+
+    assert deleted is True
+    assert photo_path.exists()
+    assert not thumb.exists()
+    assert db.fetchone("SELECT * FROM photos WHERE hash = ?", (photo_hash,)) is None
+
+
+def test_new_active_capture_replaces_older_active_capture_for_same_day(tmp_path: Path):
+    config = load_config(tmp_path / "home")
+    from selfietl.db import Database
+
+    db = Database(config.db_path)
+    project_id = db.execute(
+        "INSERT INTO projects (name, source_folder, created_at) VALUES (?, ?, ?)",
+        ("p", str(config.inbox_dir), "2026-05-08 09:00:00"),
+    )
+    for photo_hash, captured_at in [
+        ("old", "2026-05-08 08:00:00"),
+        ("keep", "2026-05-08 18:00:00"),
+        ("other-day", "2026-05-07 08:00:00"),
+    ]:
+        db.execute(
+            "INSERT INTO photos (hash, path, captured_at, skipped) VALUES (?, ?, ?, 0)",
+            (photo_hash, str(config.inbox_dir / f"{photo_hash}.jpg"), captured_at),
+        )
+        db.execute(
+            "INSERT INTO project_photos (project_id, photo_hash, added_at) VALUES (?, ?, ?)",
+            (project_id, photo_hash, "2026-05-08 18:00:00"),
+        )
+
+    with db.connect() as conn:
+        replaced = _mark_other_active_captures_for_day(
+            conn,
+            project_id=project_id,
+            keep_hash="keep",
+            captured_at=datetime(2026, 5, 8, 18, 0, 0),
+        )
+
+    assert replaced == 1
+    assert db.fetchone("SELECT skipped, skip_reason FROM photos WHERE hash = ?", ("old",))["skipped"] == 1
+    assert db.fetchone("SELECT skipped FROM photos WHERE hash = ?", ("keep",))["skipped"] == 0
+    assert db.fetchone("SELECT skipped FROM photos WHERE hash = ?", ("other-day",))["skipped"] == 0
 
 
 def test_discard_photo_returns_false_when_missing(tmp_path: Path):

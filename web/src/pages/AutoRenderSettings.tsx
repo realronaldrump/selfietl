@@ -9,7 +9,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { api, type AutoRenderConfig } from "@/api/client";
-import { Badge, Button, Input, Label, Panel, Select } from "@/components/ui";
+import { Badge, Button, Input, Label, PageFrame, Panel, Select } from "@/components/ui";
 
 export function AutoRenderSettings({ onBack }: { onBack: () => void }) {
   const queryClient = useQueryClient();
@@ -64,7 +64,7 @@ export function AutoRenderSettings({ onBack }: { onBack: () => void }) {
   }
 
   return (
-    <div className="space-y-4">
+    <PageFrame size="narrow">
       <div className="flex items-center justify-between">
         <Button size="sm" variant="ghost" onClick={onBack}>
           <ArrowLeft className="h-4 w-4" />
@@ -105,7 +105,13 @@ export function AutoRenderSettings({ onBack }: { onBack: () => void }) {
           <Clock className="h-4 w-4 text-teal" />
           {autoQuery.data ? <Badge>Next: {formatNextRun(autoQuery.data.next_run_at)}</Badge> : null}
           {autoQuery.data?.last_run_date ? <Badge tone="good">Last: {autoQuery.data.last_run_date}</Badge> : null}
+          {autoQuery.data?.last_error ? <Badge tone="bad">Last failed</Badge> : null}
         </div>
+        {autoQuery.data?.last_error ? (
+          <div className="mt-3 rounded-md bg-coral/10 p-3 text-xs font-semibold text-coral">
+            {autoQuery.data.last_error}
+          </div>
+        ) : null}
       </Panel>
 
       <Panel>
@@ -180,7 +186,7 @@ export function AutoRenderSettings({ onBack }: { onBack: () => void }) {
           {runNowMutation.isPending ? "Starting…" : "Run a render now"}
         </Button>
       </div>
-    </div>
+    </PageFrame>
   );
 }
 

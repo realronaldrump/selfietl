@@ -64,6 +64,9 @@ async def capture_selfie(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=f"Invalid captured_at: {exc}") from exc
 
+    if runner.has_active_jobs():
+        raise HTTPException(status_code=409, detail="The app is busy. Try again in a moment.")
+
     saved_path = import_to_inbox(
         config,
         contents=contents,
@@ -72,15 +75,13 @@ async def capture_selfie(
     )
     project_id = _ensure_primary_project(db, config)
 
-    if runner.has_active_jobs():
-        raise HTTPException(status_code=409, detail="The app is busy. Try again in a moment.")
-
     def work(progress, cancel_check):
         return process_single_photo(db, config, project_id, saved_path, progress, cancel_check)
 
     try:
         job = runner.start(f"capture:{saved_path.name}", work)
     except JobsPaused as exc:
+        saved_path.unlink(missing_ok=True)
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return StartJobResponse(
@@ -117,7 +118,7 @@ def today_status(
             FROM photos p
             JOIN project_photos pp ON pp.photo_hash = p.hash
             WHERE pp.project_id = ? AND date(p.captured_at) = ?
-            ORDER BY p.captured_at DESC
+            ORDER BY p.skipped ASC, p.captured_at DESC
             """,
             (project_id, today.isoformat()),
         )
@@ -217,7 +218,8 @@ def selfie_calendar(
                COUNT(*) AS n,
                MAX(CASE WHEN p.skipped = 0 THEN 1 ELSE 0 END) AS has_active,
                AVG(p.quality_score) AS quality,
-               MIN(CASE WHEN p.skipped = 0 THEN p.hash END) AS active_hash
+               MAX(CASE WHEN p.skipped = 0 THEN p.captured_at || '|' || p.hash END) AS active_key,
+               MAX(p.captured_at || '|' || p.hash) AS any_key
         FROM photos p
         JOIN project_photos pp ON pp.photo_hash = p.hash
         WHERE pp.project_id = ? AND date(p.captured_at) BETWEEN ? AND ?
@@ -228,7 +230,7 @@ def selfie_calendar(
     )
     days = []
     for row in rows:
-        active_hash = row["active_hash"] or row["hash"]
+        active_hash = _hash_from_calendar_key(row["active_key"] or row["any_key"]) or row["hash"]
         days.append(
             {
                 "date": row["day"],
@@ -240,6 +242,12 @@ def selfie_calendar(
             }
         )
     return {"days": days, "start": start_date.isoformat(), "end": end_date.isoformat()}
+
+
+def _hash_from_calendar_key(value: str | None) -> str | None:
+    if not value or "|" not in value:
+        return value
+    return value.rsplit("|", 1)[1]
 
 
 @router.delete("/capture/{photo_hash}", response_model=CaptureResponse)

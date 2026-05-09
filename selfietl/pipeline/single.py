@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -174,29 +175,38 @@ def process_single_photo(
     ).score
     should_skip = quality < config.quality.threshold
     skip_reason = "low_quality" if should_skip else None
+    replaced_count = 0
 
-    db.execute(
-        """
-        UPDATE photos
-        SET detected_at = ?, landmarks_path = ?, quality_score = ?,
-            yaw = ?, pitch = ?, roll = ?, eye_open_ratio = ?, mouth_open_ratio = ?,
-            skipped = ?, skip_reason = ?, user_override = 0
-        WHERE hash = ?
-        """,
-        (
-            detected_at,
-            str(landmarks_path),
-            quality,
-            detection.yaw,
-            detection.pitch,
-            detection.roll,
-            detection.eye_open_ratio,
-            detection.mouth_open_ratio,
-            1 if should_skip else 0,
-            skip_reason,
-            photo_hash,
-        ),
-    )
+    with db.connect() as conn:
+        conn.execute(
+            """
+            UPDATE photos
+            SET detected_at = ?, landmarks_path = ?, quality_score = ?,
+                yaw = ?, pitch = ?, roll = ?, eye_open_ratio = ?, mouth_open_ratio = ?,
+                skipped = ?, skip_reason = ?, user_override = 0
+            WHERE hash = ?
+            """,
+            (
+                detected_at,
+                str(landmarks_path),
+                quality,
+                detection.yaw,
+                detection.pitch,
+                detection.roll,
+                detection.eye_open_ratio,
+                detection.mouth_open_ratio,
+                1 if should_skip else 0,
+                skip_reason,
+                photo_hash,
+            ),
+        )
+        if not should_skip:
+            replaced_count = _mark_other_active_captures_for_day(
+                conn,
+                project_id=project_id,
+                keep_hash=photo_hash,
+                captured_at=meta["captured_at"],
+            )
 
     aligned = False
     project_row = db.fetchone(
@@ -232,6 +242,7 @@ def process_single_photo(
         "skip_reason": skip_reason,
         "duplicate_of": duplicate_of,
         "aligned": aligned,
+        "replaced_count": replaced_count,
         "quality_score": quality,
         "yaw": detection.yaw,
         "pitch": detection.pitch,
@@ -252,7 +263,9 @@ def discard_photo(db: Database, config: AppConfig, photo_hash: str) -> bool:
         return False
     candidates: list[Path] = []
     if row["path"]:
-        candidates.append(Path(row["path"]))
+        source_path = Path(row["path"])
+        if _is_inside(config.inbox_dir, source_path):
+            candidates.append(source_path)
     candidates.append(config.thumbs_dir / f"{photo_hash}.jpg")
     candidates.append(config.landmarks_dir / f"{photo_hash}.npz")
     candidates.append(config.aligned_landmarks_dir / f"{photo_hash}.npz")
@@ -268,6 +281,43 @@ def discard_photo(db: Database, config: AppConfig, photo_hash: str) -> bool:
         conn.execute("DELETE FROM project_photos WHERE photo_hash = ?", (photo_hash,))
         conn.execute("DELETE FROM photos WHERE hash = ?", (photo_hash,))
     return True
+
+
+def _mark_other_active_captures_for_day(
+    conn: sqlite3.Connection,
+    *,
+    project_id: int,
+    keep_hash: str,
+    captured_at: datetime,
+) -> int:
+    """Keep one active frame per local calendar date for daily captures."""
+    cursor = conn.execute(
+        """
+        UPDATE photos
+        SET skipped = 1,
+            skip_reason = 'replaced_by_newer_capture',
+            user_override = 0
+        WHERE hash IN (
+            SELECT p.hash
+            FROM photos p
+            JOIN project_photos pp ON pp.photo_hash = p.hash
+            WHERE pp.project_id = ?
+              AND p.hash != ?
+              AND p.skipped = 0
+              AND date(p.captured_at) = ?
+        )
+        """,
+        (project_id, keep_hash, captured_at.date().isoformat()),
+    )
+    return int(cursor.rowcount or 0)
+
+
+def _is_inside(root: Path, candidate: Path) -> bool:
+    try:
+        candidate.resolve().relative_to(root.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 __all__ = ["import_to_inbox", "process_single_photo", "discard_photo"]

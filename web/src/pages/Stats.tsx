@@ -12,7 +12,7 @@ import {
   YAxis,
 } from "recharts";
 import { api, type Project } from "@/api/client";
-import { Metric, Panel } from "@/components/ui";
+import { Metric, PageFrame, Panel } from "@/components/ui";
 
 type StatsPayload = {
   timeline: Array<{ date: string; quality: number | null; skipped: boolean }>;
@@ -34,7 +34,7 @@ export function Stats({ project }: { project: Project }) {
     : 0;
 
   return (
-    <div className="space-y-4">
+    <PageFrame size="wide">
       <div className="grid gap-3 md:grid-cols-4">
         <Metric label="Cataloged" value={stats?.total ?? project.photo_count} />
         <Metric label="Skipped" value={stats?.skipped ?? project.skipped_count} tone={project.skipped_count ? "warn" : "default"} />
@@ -105,7 +105,7 @@ export function Stats({ project }: { project: Project }) {
           <img className="mt-3 aspect-video w-full rounded-md bg-ink object-contain" src={`/api/projects/${project.id}/heatmap`} alt="" />
         </Panel>
       </div>
-    </div>
+    </PageFrame>
   );
 }
 

@@ -39,7 +39,7 @@ def _build_response(
 ) -> AutoRenderResponse:
     settings = load_settings(config)
     project_id = primary_project_id(db, config)
-    next_run = next_run_at(datetime.now(), settings.time, settings.last_run_date)
+    next_run = next_run_at(datetime.now(), settings.time, settings.last_run_date, settings.last_attempt_at)
     last_render: dict[str, Any] | None = None
     if settings.last_render_id:
         row = db.fetchone(
@@ -61,6 +61,8 @@ def _build_response(
         next_run_at=next_run.isoformat(timespec="seconds"),
         last_run_date=settings.last_run_date,
         last_render_id=settings.last_render_id,
+        last_attempt_at=settings.last_attempt_at,
+        last_error=settings.last_error,
         last_render=last_render,
         render_config=settings.render_config,
         project_id=project_id,
@@ -124,9 +126,6 @@ def run_auto_render_now(
     except JobsPaused as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    settings.last_run_date = datetime.now().date().isoformat()
-    settings.last_render_id = render_id
-    save_settings(config, settings)
     return StartJobResponse(
         job_id=job_id,
         status_url=f"/api/jobs/{job_id}",

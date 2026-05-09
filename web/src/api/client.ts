@@ -182,6 +182,8 @@ export type AutoRenderConfig = {
   next_run_at: string;
   last_run_date: string | null;
   last_render_id: number | null;
+  last_attempt_at: string | null;
+  last_error: string | null;
   last_render: LatestRender | null;
   render_config: Record<string, unknown>;
   project_id: number | null;
@@ -233,6 +235,7 @@ export const api = {
     fetchJson<JobStart>(`/api/projects/${projectId}/render`, { method: "POST", body: JSON.stringify(payload) }),
   renders: (projectId: number) => fetchJson<Render[]>(`/api/projects/${projectId}/renders`),
   jobs: () => fetchJson<JobStatus[]>("/api/jobs"),
+  job: (jobId: string) => fetchJson<JobStatus>(`/api/jobs/${jobId}`),
   cancelJob: (jobId: string) => fetchJson(`/api/jobs/${jobId}`, { method: "DELETE" }),
   defaultSource: () => fetchJson<PathResponse>("/api/system/default-source"),
   inboxStatus: () => fetchJson<InboxStatus>("/api/system/inbox-status"),
