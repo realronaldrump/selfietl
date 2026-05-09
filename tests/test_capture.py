@@ -1,20 +1,39 @@
+import json
 from datetime import datetime
 from pathlib import Path
 
+import piexif
 from PIL import Image
+from fastapi.testclient import TestClient
 
 from selfietl.config import load_config
+from selfietl.pipeline.detect import DetectionResult
 from selfietl.pipeline.single import (
     _mark_other_active_captures_for_day,
     discard_photo,
     import_to_inbox,
 )
+from selfietl.server import create_app
 
 
 def _make_jpeg(tmp_path: Path) -> bytes:
     image = Image.new("RGB", (320, 320), (220, 200, 180))
     target = tmp_path / "src.jpg"
     image.save(target, "JPEG", quality=85)
+    return target.read_bytes()
+
+
+def _make_exif_jpeg(tmp_path: Path, when: str = "2026:05:03 08:09:10") -> bytes:
+    image = Image.new("RGB", (320, 320), (220, 200, 180))
+    target = tmp_path / "exif.jpg"
+    exif = {
+        "0th": {
+            piexif.ImageIFD.Make: "SelfieTLTest",
+            piexif.ImageIFD.Model: "BackfillCam",
+        },
+        "Exif": {piexif.ExifIFD.DateTimeOriginal: when},
+    }
+    image.save(target, "JPEG", quality=85, exif=piexif.dump(exif))
     return target.read_bytes()
 
 
@@ -53,6 +72,66 @@ def test_import_to_inbox_uses_safe_extension_for_unknown(tmp_path: Path):
         captured_at=datetime(2026, 5, 8, 9, 0, 0),
     )
     assert saved.suffix == ".jpg"
+
+
+def test_capture_preview_reads_photo_metadata(tmp_path: Path):
+    config = load_config(tmp_path / "home")
+    app = create_app(config)
+    contents = _make_exif_jpeg(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/capture/preview",
+            files=[("files", ("old-selfie.jpg", contents, "image/jpeg"))],
+        )
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["filename"] == "old-selfie.jpg"
+    assert item["captured_at"] == "2026-05-03 08:09:10"
+    assert item["captured_at_source"] == "exif_datetime_original"
+    assert item["camera_make"] == "SelfieTLTest"
+    assert item["camera_model"] == "BackfillCam"
+    assert item["width"] == 320
+    assert item["height"] == 320
+
+
+def test_process_single_photo_uses_manual_captured_at_override(tmp_path: Path, monkeypatch):
+    config = load_config(tmp_path / "home")
+    from selfietl.db import Database
+    from selfietl.pipeline import single as single_pipeline
+
+    db = Database(config.db_path)
+    project_id = db.execute(
+        "INSERT INTO projects (name, source_folder, created_at) VALUES (?, ?, ?)",
+        ("p", str(config.inbox_dir), "2026-05-08 09:00:00"),
+    )
+    source = config.inbox_dir / "manual-override.jpg"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(_make_exif_jpeg(tmp_path, when="2026:05:08 14:30:00"))
+
+    def fake_detect(*args, **kwargs):
+        return DetectionResult(
+            landmarks=None,
+            bbox=None,
+            confidence=0,
+            yaw=None,
+            pitch=None,
+            roll=None,
+            eye_open_ratio=None,
+            mouth_open_ratio=None,
+            warnings=["no_face_detected"],
+            method="test",
+        )
+
+    monkeypatch.setattr(single_pipeline, "detect_landmarks", fake_detect)
+
+    override = datetime(2026, 5, 3, 8, 9, 10)
+    result = single_pipeline.process_single_photo(db, config, project_id, source, captured_at=override)
+
+    row = db.fetchone("SELECT captured_at, warnings_json FROM photos WHERE hash = ?", (result["hash"],))
+    assert str(row["captured_at"]) == "2026-05-03 08:09:10"
+    assert "captured_at_user_override" in json.loads(row["warnings_json"])
 
 
 def test_discard_photo_removes_files_and_row(tmp_path: Path):

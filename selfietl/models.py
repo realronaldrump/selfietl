@@ -69,6 +69,25 @@ class StartJobResponse(BaseModel):
     events_url: str
 
 
+class CapturePreviewItem(BaseModel):
+    index: int
+    filename: str
+    file_size: int
+    supported: bool = True
+    captured_at: str | None = None
+    captured_at_source: str | None = None
+    camera_make: str | None = None
+    camera_model: str | None = None
+    width: int | None = None
+    height: int | None = None
+    warnings: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class CapturePreviewResponse(BaseModel):
+    items: list[CapturePreviewItem]
+
+
 class JobResponse(BaseModel):
     id: str
     name: str

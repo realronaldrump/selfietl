@@ -84,6 +84,7 @@ def exif_metadata(path: str | Path) -> dict[str, Any]:
     path = Path(path)
     warnings: list[str] = []
     captured_at: datetime | None = None
+    captured_at_source: str | None = None
     filename_captured_at = parse_filename_datetime(path.name)
     make = None
     model = None
@@ -91,24 +92,30 @@ def exif_metadata(path: str | Path) -> dict[str, Any]:
         register_heif()
         with Image.open(path) as image:
             exif = image.getexif()
-            original_date = parse_exif_datetime(str(exif.get(36867))) if exif.get(36867) else None
-            fallback_exif_date = parse_exif_datetime(str(exif.get(306))) if exif.get(306) else None
+            piexif_data = _load_piexif(path)
+            original_value = _pil_exif_value(exif, 36867) or _piexif_value(piexif_data, "Exif", 36867)
+            fallback_value = _pil_exif_value(exif, 306) or _piexif_value(piexif_data, "0th", 306)
+            original_date = parse_exif_datetime(_clean_exif_text(original_value) or "") if original_value else None
+            fallback_exif_date = parse_exif_datetime(_clean_exif_text(fallback_value) or "") if fallback_value else None
             if original_date:
                 captured_at = original_date
+                captured_at_source = "exif_datetime_original"
                 if filename_captured_at and abs((filename_captured_at - captured_at).total_seconds()) > 3600:
                     warnings.append("filename_datetime_differs_from_exif")
             elif filename_captured_at:
                 captured_at = filename_captured_at
+                captured_at_source = "filename"
                 warnings.append("missing_datetime_original")
                 warnings.append("datetime_from_filename")
                 if fallback_exif_date and abs((fallback_exif_date - filename_captured_at).total_seconds()) > 3600:
                     warnings.append("exif_datetime_ignored_for_filename")
             elif fallback_exif_date:
                 captured_at = fallback_exif_date
+                captured_at_source = "exif_datetime"
                 warnings.append("missing_datetime_original")
                 warnings.append("datetime_from_exif_datetime")
-            make = _clean_exif_text(exif.get(271))
-            model = _clean_exif_text(exif.get(272))
+            make = _clean_exif_text(_pil_exif_value(exif, 271) or _piexif_value(piexif_data, "0th", 271))
+            model = _clean_exif_text(_pil_exif_value(exif, 272) or _piexif_value(piexif_data, "0th", 272))
     except Exception as exc:
         warnings.append(f"exif_read_failed:{exc.__class__.__name__}")
 
@@ -116,13 +123,16 @@ def exif_metadata(path: str | Path) -> dict[str, Any]:
         warnings.append("missing_datetime_original")
         if filename_captured_at:
             captured_at = filename_captured_at
+            captured_at_source = "filename"
             warnings.append("datetime_from_filename")
         else:
             captured_at = datetime.fromtimestamp(path.stat().st_mtime)
+            captured_at_source = "file_modified_time"
             warnings.append("datetime_from_file_modified_time")
 
     return {
         "captured_at": captured_at,
+        "captured_at_source": captured_at_source,
         "camera_make": make,
         "camera_model": model,
         "warnings": warnings,
@@ -163,9 +173,45 @@ def parse_filename_datetime(value: str) -> datetime | None:
     return None
 
 
+def _load_piexif(path: Path) -> dict[str, Any] | None:
+    if piexif is None:
+        return None
+    try:
+        return piexif.load(str(path))
+    except Exception:
+        return None
+
+
+def _piexif_value(exif: dict[str, Any] | None, ifd: str, tag: int) -> Any:
+    if not exif:
+        return None
+    values = exif.get(ifd)
+    if not isinstance(values, dict):
+        return None
+    return values.get(tag)
+
+
+def _pil_exif_value(exif: Any, tag: int) -> Any:
+    value = exif.get(tag)
+    if value is not None:
+        return value
+    for ifd_tag in (0x8769,):
+        try:
+            ifd = exif.get_ifd(ifd_tag)
+        except Exception:
+            continue
+        value = ifd.get(tag)
+        if value is not None:
+            return value
+    return None
+
+
 def _clean_exif_text(value: Any) -> str | None:
     if value is None:
         return None
+    if isinstance(value, bytes):
+        text = value.decode("utf-8", errors="ignore").strip("\x00").strip()
+        return text or None
     text = str(value).strip()
     return text or None
 

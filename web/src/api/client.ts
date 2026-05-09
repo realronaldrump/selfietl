@@ -44,6 +44,30 @@ export type JobStart = {
   events_url: string;
 };
 
+export type CapturePreviewItem = {
+  index: number;
+  filename: string;
+  file_size: number;
+  supported: boolean;
+  captured_at: string | null;
+  captured_at_source: string | null;
+  camera_make: string | null;
+  camera_model: string | null;
+  width: number | null;
+  height: number | null;
+  warnings: string[];
+  error: string | null;
+};
+
+export type CapturePreviewResponse = {
+  items: CapturePreviewItem[];
+};
+
+export type CaptureBatchItem = {
+  file: File;
+  capturedAt?: string | null;
+};
+
 export type JobStatus = {
   id: string;
   name: string;
@@ -244,12 +268,48 @@ export const api = {
   pickFolder: () => fetchJson<PathResponse>("/api/system/pick-folder", { method: "POST" }),
   resetAppData: () => fetchJson<{ ok: boolean; inbox_path: string }>("/api/system/reset", { method: "POST", body: JSON.stringify({ confirm: true }) }),
   today: () => fetchJson<TodayResponse>("/api/today"),
+  previewCapture: (files: File[]) => {
+    const form = new FormData();
+    files.forEach((file) => form.append("files", file, file.name));
+    return fetch("/api/capture/preview", { method: "POST", body: form }).then(async (response) => {
+      if (!response.ok) {
+        let message = `${response.status} ${response.statusText}`;
+        try {
+          const payload = await response.json();
+          message = payload.detail ?? message;
+        } catch {
+          // keep status text
+        }
+        throw new Error(message);
+      }
+      return response.json() as Promise<CapturePreviewResponse>;
+    });
+  },
   capture: (file: File | Blob, capturedAt?: string) => {
     const form = new FormData();
     const filename = file instanceof File ? file.name : "selfie.jpg";
     form.append("file", file, filename);
     const query = capturedAt ? `?captured_at=${encodeURIComponent(capturedAt)}` : "";
     return fetch(`/api/capture${query}`, { method: "POST", body: form }).then(async (response) => {
+      if (!response.ok) {
+        let message = `${response.status} ${response.statusText}`;
+        try {
+          const payload = await response.json();
+          message = payload.detail ?? message;
+        } catch {
+          // keep status text
+        }
+        throw new Error(message);
+      }
+      return response.json() as Promise<JobStart>;
+    });
+  },
+  captureBatch: (items: CaptureBatchItem[]) => {
+    const form = new FormData();
+    const metadata = items.map((item) => ({ captured_at: item.capturedAt ?? null }));
+    items.forEach((item) => form.append("files", item.file, item.file.name));
+    form.append("metadata", JSON.stringify(metadata));
+    return fetch("/api/capture/batch", { method: "POST", body: form }).then(async (response) => {
       if (!response.ok) {
         let message = `${response.status} ${response.statusText}`;
         try {
