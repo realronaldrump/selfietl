@@ -310,13 +310,15 @@ function buildStatsView(stats: StatsPayload | undefined, project: Project) {
   const firstDate = timelineRaw[0]?.date ?? null;
   const lastDate = timelineRaw[timelineRaw.length - 1]?.date ?? null;
   const spanDays = firstDate && lastDate ? Math.max(1, daysBetween(firstDate, lastDate) + 1) : 0;
-  const streaks = buildStreaks(timelineRaw.map((item) => item.date));
+  const today = isoDate(new Date());
+  const yesterday = shiftIsoDay(today, -1);
+  const streakDays = timelineRaw.map((item) => toIsoDay(item.date)).filter((day) => day < today);
+  const streaks = buildStreaks(streakDays);
   const bestStreaks = [...streaks]
     .sort((a, b) => b.length - a.length || b.end.localeCompare(a.end))
     .slice(0, 3);
   const latestStreak = streaks[streaks.length - 1] ?? null;
-  const today = isoDate(new Date());
-  const currentStreak = latestStreak?.end === today ? latestStreak : null;
+  const currentStreak = latestStreak?.end === yesterday ? latestStreak : null;
   const qualityScale = qualityAxisScale(qualityValues);
   const avgPoseDrift = average(
     poseRaw.map((item) => {
@@ -345,10 +347,10 @@ function buildStatsView(stats: StatsPayload | undefined, project: Project) {
     peakMonthCount: months.reduce((max, item) => Math.max(max, item.count), 0),
     currentStreakLength: currentStreak?.length ?? 0,
     currentStreakLabel: currentStreak
-      ? streakDateRange(currentStreak)
+      ? `${streakDateRange(currentStreak)} through yesterday`
       : latestStreak
-        ? `Last selfie ${formatFullDate(latestStreak.end)}`
-        : "No selfies yet",
+        ? `Last completed-day selfie ${formatFullDate(latestStreak.end)}`
+        : "No completed-day selfies yet",
     longestStreak: bestStreaks[0] ?? null,
     bestStreaks,
     avgPoseDrift,
@@ -371,6 +373,7 @@ function StreaksPanel({
           <h2 className="text-sm font-black uppercase tracking-[0.12em] text-ink/55">Streaks</h2>
           <div className="mt-2 text-3xl font-black text-ink">{currentStreakLength} days</div>
           <p className="mt-1 text-sm font-semibold text-ink/55">Current streak: {currentStreakLabel}</p>
+          <p className="mt-1 text-xs font-bold uppercase tracking-[0.12em] text-ink/40">Today counts tomorrow</p>
         </div>
         <Badge tone={currentStreakLength > 0 ? "good" : "warn"}>{currentStreakLength > 0 ? "active" : "paused"}</Badge>
       </div>
@@ -633,6 +636,12 @@ function toIsoDay(value: string) {
 function localDateFromIsoDay(day: string) {
   const [year, month, date] = day.split("-").map(Number);
   return new Date(year, month - 1, date);
+}
+
+function shiftIsoDay(day: string, offset: number) {
+  const [year, month, date] = day.split("-").map(Number);
+  if (!year || !month || !date) return day;
+  return new Date(Date.UTC(year, month - 1, date + offset)).toISOString().slice(0, 10);
 }
 
 function isoDate(date: Date) {
