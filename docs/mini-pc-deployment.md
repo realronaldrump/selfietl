@@ -4,8 +4,8 @@ SelfieTL is deployed permanently on the mini PC over Tailscale.
 
 - Service name: `selfietl.service`
 - Host: `100.96.182.111`
-- Port: `8766`
-- URL: `http://100.96.182.111:8766`
+- Local service port: `127.0.0.1:8766`
+- Tailnet URL: `https://davis-mini-pc-1.tail59b3f5.ts.net/selfietl/`
 - Working directory: `/home/davis/selfietl`
 - Data directory: `/home/davis/.selfietl`
 - Env file: `/home/davis/.config/selfietl/selfietl.env`
@@ -27,10 +27,10 @@ cd /home/davis/selfietl/web
 npm ci
 npm run build
 cd /home/davis/selfietl
-/home/davis/selfietl/.venv/bin/python -m selfietl serve --host 0.0.0.0 --port 8766 --data-dir /home/davis/.selfietl
+sudo systemctl restart selfietl.service
 ```
 
-Tailscale Serve is intentionally left unchanged because `/` currently routes to Drive Web on port `8730`.
+The systemd service binds to `127.0.0.1:8766`. Tailscale Serve points `/` at the local Caddy portal on `127.0.0.1:8700`; Caddy routes `/selfietl/*`, `/assets/*`, and SelfieTL API requests to `127.0.0.1:8766` while leaving the other mini PC apps in place.
 
 ## Daily selfie + auto-render
 
@@ -59,20 +59,20 @@ The scheduler records a day as complete only after the MP4 finishes successfully
 Trigger an immediate render from the UI's *Render now* button or via:
 
 ```bash
-curl -X POST http://100.96.182.111:8766/api/auto-render/run
+curl -X POST https://davis-mini-pc-1.tail59b3f5.ts.net/selfietl/api/auto-render/run
 ```
 
 Set the time without opening the UI:
 
 ```bash
-curl -X PATCH http://100.96.182.111:8766/api/auto-render \
+curl -X PATCH https://davis-mini-pc-1.tail59b3f5.ts.net/selfietl/api/auto-render \
   -H 'Content-Type: application/json' \
   -d '{"time": "03:30", "enabled": true}'
 ```
 
 ## Add to Home Screen on iPhone
 
-1. Open `http://100.96.182.111:8766` in Safari over Tailscale.
+1. Open `https://davis-mini-pc-1.tail59b3f5.ts.net/selfietl/` in Safari over Tailscale.
 2. Tap the share sheet → **Add to Home Screen**.
 3. Launch from the icon: it opens full-screen with the bottom tab bar (Today / Timeline / Capture / Video) and saves Today as the default page.
 
