@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   CalendarDays,
   ChevronLeft,
   ChevronRight,
@@ -272,7 +273,13 @@ function DayPhotoView({
   deletePending: boolean;
 }) {
   const [view, setView] = useState<"aligned" | "original">(photo.aligned_url ? "aligned" : "original");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const src = view === "aligned" && photo.aligned_url ? photo.aligned_url : photo.image_url;
+
+  useEffect(() => {
+    setConfirmingDelete(false);
+  }, [photo.hash]);
+
   return (
     <div>
       <div className="overflow-hidden rounded-md bg-ink">
@@ -310,17 +317,42 @@ function DayPhotoView({
         </Button>
         <Button
           variant="ghost"
-          onClick={() => {
-            if (window.confirm("Delete this selfie from the app catalog? App-owned inbox files are removed; external source photos are left on disk.")) {
-              onDelete();
-            }
-          }}
+          onClick={() => setConfirmingDelete(true)}
           disabled={deletePending}
         >
           <Trash2 className="h-4 w-4 text-coral" />
           <span className="text-coral">Delete</span>
         </Button>
       </div>
+      {confirmingDelete ? (
+        <div className="mt-3 rounded-md border border-coral/30 bg-coral/10 p-3">
+          <div className="flex gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-coral" />
+            <div className="min-w-0">
+              <div className="text-sm font-black text-ink">Delete this selfie?</div>
+              <p className="mt-1 text-xs font-semibold leading-5 text-ink/65">
+                This removes it from the app catalog. App-owned inbox files are removed; external source photos are left on disk.
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 flex justify-end gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setConfirmingDelete(false)} disabled={deletePending}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={() => {
+                onDelete();
+                setConfirmingDelete(false);
+              }}
+              disabled={deletePending}
+            >
+              {deletePending ? "Deleting" : "Delete"}
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
