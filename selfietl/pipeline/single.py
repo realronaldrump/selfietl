@@ -61,6 +61,7 @@ def process_single_photo(
     source_path: Path,
     progress: Progress | None = None,
     cancel_check: CancelCheck | None = None,
+    captured_at: datetime | None = None,
 ) -> dict:
     """Run scan + detect + align for a single newly captured photo.
 
@@ -79,6 +80,8 @@ def process_single_photo(
     photo_hash = sha1_file(source_path)
     width, height = image_dimensions(source_path)
     meta = exif_metadata(source_path)
+    if captured_at is not None:
+        meta = _with_captured_at_override(meta, captured_at)
     phash = perceptual_hash(source_path)
 
     duplicate_of: str | None = None
@@ -310,6 +313,18 @@ def _mark_other_active_captures_for_day(
         (project_id, keep_hash, captured_at.date().isoformat()),
     )
     return int(cursor.rowcount or 0)
+
+
+def _with_captured_at_override(meta: dict, captured_at: datetime) -> dict:
+    updated = dict(meta)
+    warnings = list(updated.get("warnings") or [])
+    original = updated.get("captured_at")
+    if original != captured_at and "captured_at_user_override" not in warnings:
+        warnings.append("captured_at_user_override")
+    updated["captured_at"] = captured_at
+    updated["captured_at_source"] = "user_override"
+    updated["warnings"] = warnings
+    return updated
 
 
 def _is_inside(root: Path, candidate: Path) -> bool:

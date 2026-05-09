@@ -34,8 +34,21 @@ def test_age_lapse_filename_is_used_when_datetime_original_is_missing(tmp_path: 
     metadata = exif_metadata(source)
 
     assert metadata["captured_at"].isoformat(sep=" ") == "2021-03-02 14:12:40"
+    assert metadata["captured_at_source"] == "filename"
     assert "datetime_from_filename" in metadata["warnings"]
     assert "exif_datetime_ignored_for_filename" in metadata["warnings"]
+
+
+def test_datetime_original_source_is_reported(tmp_path: Path):
+    source = tmp_path / "source.jpg"
+    image = Image.new("RGB", (32, 32), (220, 100, 40))
+    exif = {"Exif": {piexif.ExifIFD.DateTimeOriginal: "2020:01:02 03:04:05"}}
+    image.save(source, "JPEG", exif=piexif.dump(exif))
+
+    metadata = exif_metadata(source)
+
+    assert metadata["captured_at"].isoformat(sep=" ") == "2020-01-02 03:04:05"
+    assert metadata["captured_at_source"] == "exif_datetime_original"
 
 
 def test_parse_filename_datetime_accepts_age_lapse_pattern():

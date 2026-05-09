@@ -3,40 +3,89 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   ArrowLeft,
+  Calendar,
   Camera,
   CheckCircle2,
   ImagePlus,
   Loader2,
   RefreshCw,
+  Trash2,
 } from "lucide-react";
-import { api, type JobStatus } from "@/api/client";
-import { Badge, Button, PageFrame, Panel, ProgressBar, cn } from "@/components/ui";
+import { api, type CapturePreviewItem, type JobStatus } from "@/api/client";
+import { Badge, Button, Input, Label, PageFrame, Panel, ProgressBar, cn } from "@/components/ui";
 import { useJobEvents } from "@/hooks/useJobEvents";
 
 type CaptureStep = "pick" | "preview" | "uploading" | "result";
 
+type UploadItem = {
+  id: string;
+  index: number;
+  file: File;
+  previewUrl: string;
+  filename: string;
+  fileSize: number;
+  capturedAtLocal: string;
+  originalCapturedAtLocal: string | null;
+  capturedAtSource: string | null;
+  cameraMake: string | null;
+  cameraModel: string | null;
+  width: number | null;
+  height: number | null;
+  warnings: string[];
+  metadataLoading: boolean;
+  supported: boolean;
+  error: string | null;
+  adjusted: boolean;
+};
+
+type BatchPhotoResult = {
+  index?: number;
+  filename?: string;
+  hash?: string;
+  captured_at?: string;
+  skipped?: boolean;
+  skip_reason?: string | null;
+  quality_score?: number | null;
+  aligned?: boolean;
+  duplicate_of?: string | null;
+  replaced_count?: number | null;
+  warnings?: string[];
+  error?: string;
+};
+
+type BatchResult = {
+  photos?: BatchPhotoResult[];
+  total?: number;
+  succeeded?: number;
+  failed?: number;
+  skipped?: boolean;
+  skip_reason?: string | null;
+  quality_score?: number | null;
+  aligned?: boolean;
+  duplicate_of?: string | null;
+  replaced_count?: number | null;
+};
+
 export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => void }) {
   const queryClient = useQueryClient();
   const [step, setStep] = useState<CaptureStep>("pick");
-  const [selected, setSelected] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [items, setItems] = useState<UploadItem[]>([]);
   const [jobId, setJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const libraryInputRef = useRef<HTMLInputElement>(null);
+  const itemsRef = useRef<UploadItem[]>([]);
+  const previewRequestRef = useRef(0);
 
   useEffect(() => {
-    if (!selected) {
-      setPreviewUrl((current) => {
-        if (current) URL.revokeObjectURL(current);
-        return null;
-      });
-      return;
-    }
-    const url = URL.createObjectURL(selected);
-    setPreviewUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [selected]);
+    itemsRef.current = items;
+  }, [items]);
+
+  useEffect(() => {
+    return () => {
+      revokeUploadItems(itemsRef.current);
+    };
+  }, []);
 
   const onTerminal = useCallback(
     (job: JobStatus) => {
@@ -50,17 +99,21 @@ export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => 
     [queryClient],
   );
   const job = useJobEvents(jobId, onTerminal);
-  const result = job?.result as null | {
-    skipped?: boolean;
-    skip_reason?: string | null;
-    quality_score?: number | null;
-    aligned?: boolean;
-    duplicate_of?: string | null;
-    replaced_count?: number | null;
-  };
+  const result = job?.result as BatchResult | null;
+
+  const readyToUpload = useMemo(
+    () => items.length > 0 && items.every((item) => !item.metadataLoading && item.supported && item.capturedAtLocal),
+    [items],
+  );
 
   const captureMutation = useMutation({
-    mutationFn: async (file: File) => api.capture(file, new Date().toISOString()),
+    mutationFn: async (currentItems: UploadItem[]) =>
+      api.captureBatch(
+        currentItems.map((item) => ({
+          file: item.file,
+          capturedAt: item.capturedAtLocal ? datetimeLocalToIso(item.capturedAtLocal) : null,
+        })),
+      ),
     onMutate: () => setStep("uploading"),
     onSuccess: (started) => {
       setError(null);
@@ -77,18 +130,88 @@ export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => 
     setError(null);
     cameraInputRef.current?.click();
   }
+
   function pickFromLibrary() {
     setError(null);
     libraryInputRef.current?.click();
   }
+
+  function handleSelectedFiles(fileList: FileList | null) {
+    const files = Array.from(fileList ?? []);
+    if (!files.length) return;
+    const nextItems = files.map((file, index) => createUploadItem(file, index));
+    previewRequestRef.current += 1;
+    const requestId = previewRequestRef.current;
+    setItems((current) => {
+      revokeUploadItems(current);
+      return nextItems;
+    });
+    setJobId(null);
+    setError(null);
+    setStep("preview");
+    void loadPreviewMetadata(nextItems, requestId);
+  }
+
+  async function loadPreviewMetadata(uploadItems: UploadItem[], requestId: number) {
+    try {
+      const response = await api.previewCapture(uploadItems.map((item) => item.file));
+      if (previewRequestRef.current !== requestId) return;
+      const byIndex = new Map(response.items.map((item) => [item.index, item]));
+      setItems((current) =>
+        current.map((item) => applyPreviewItem(item, byIndex.get(item.index))),
+      );
+    } catch (err) {
+      if (previewRequestRef.current !== requestId) return;
+      const message = err instanceof Error ? err.message : "Could not read photo metadata";
+      setError(message);
+      setItems((current) =>
+        current.map((item) => ({
+          ...item,
+          capturedAtLocal: item.capturedAtLocal || datetimeToLocalInput(new Date()),
+          metadataLoading: false,
+          error: item.error ?? message,
+        })),
+      );
+    }
+  }
+
+  function updateCapturedAt(id: string, value: string) {
+    setItems((current) =>
+      current.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              capturedAtLocal: value,
+              adjusted: value !== item.originalCapturedAtLocal,
+            }
+          : item,
+      ),
+    );
+  }
+
+  function removeItem(id: string) {
+    setItems((current) => {
+      const next = current.filter((item) => item.id !== id);
+      const removed = current.find((item) => item.id === id);
+      if (removed) URL.revokeObjectURL(removed.previewUrl);
+      return next;
+    });
+    if (items.length === 1) {
+      setStep("pick");
+      setError(null);
+    }
+  }
+
   function reset() {
-    setSelected(null);
+    previewRequestRef.current += 1;
+    setItems((current) => {
+      revokeUploadItems(current);
+      return [];
+    });
     setJobId(null);
     setError(null);
     setStep("pick");
   }
-
-  const filename = useMemo(() => selected?.name ?? "selfie.jpg", [selected]);
 
   return (
     <PageFrame size="phone">
@@ -110,11 +233,7 @@ export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => 
         capture="user"
         className="hidden"
         onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (file) {
-            setSelected(file);
-            setStep("preview");
-          }
+          handleSelectedFiles(event.target.files);
           event.target.value = "";
         }}
       />
@@ -122,40 +241,42 @@ export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => 
         ref={libraryInputRef}
         type="file"
         accept="image/*"
+        multiple
         className="hidden"
         onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (file) {
-            setSelected(file);
-            setStep("preview");
-          }
+          handleSelectedFiles(event.target.files);
           event.target.value = "";
         }}
       />
 
       {step === "pick" ? <PickStep onCamera={pickFromCamera} onLibrary={pickFromLibrary} /> : null}
 
-      {step === "preview" && selected && previewUrl ? (
+      {step === "preview" ? (
         <PreviewStep
-          previewUrl={previewUrl}
-          filename={filename}
-          fileSize={selected.size}
+          items={items}
           uploading={captureMutation.isPending}
-          onConfirm={() => captureMutation.mutate(selected)}
+          canUpload={readyToUpload}
+          onConfirm={() => captureMutation.mutate(items)}
           onRetake={pickFromCamera}
           onChoose={pickFromLibrary}
+          onRemove={removeItem}
+          onDateChange={updateCapturedAt}
           error={error}
         />
       ) : null}
 
-      {(step === "uploading" || step === "result") && previewUrl ? (
+      {(step === "uploading" || step === "result") && items.length ? (
         <ResultStep
-          previewUrl={previewUrl}
+          items={items}
           job={job}
-          result={result ?? null}
+          result={normalizeResult(result, items)}
           onRetake={() => {
             reset();
             pickFromCamera();
+          }}
+          onChoose={() => {
+            reset();
+            pickFromLibrary();
           }}
           onDone={onDone}
           error={error}
@@ -169,10 +290,9 @@ function PickStep({ onCamera, onLibrary }: { onCamera: () => void; onLibrary: ()
   return (
     <div className="space-y-3">
       <Panel>
-        <h2 className="text-xl font-black text-ink">Take today's selfie</h2>
+        <h2 className="text-xl font-black text-ink">Capture or import selfies</h2>
         <p className="mt-1 text-sm font-semibold leading-6 text-ink/65">
-          Use the camera button to open the iPhone camera with the front lens already selected. After you capture,
-          you'll get one chance to confirm before it joins the timelapse.
+          Use the camera for today's frame, or choose one or many older photos from the library.
         </p>
       </Panel>
       <Panel className="overflow-hidden p-0">
@@ -185,7 +305,7 @@ function PickStep({ onCamera, onLibrary }: { onCamera: () => void; onLibrary: ()
         </Button>
         <Button variant="secondary" onClick={onLibrary}>
           <ImagePlus className="h-5 w-5" />
-          Choose from library
+          Choose photos
         </Button>
       </div>
       <Panel>
@@ -240,45 +360,70 @@ function CameraTipsHero() {
 }
 
 function PreviewStep({
-  previewUrl,
-  filename,
-  fileSize,
+  items,
   uploading,
+  canUpload,
   onConfirm,
   onRetake,
   onChoose,
+  onRemove,
+  onDateChange,
   error,
 }: {
-  previewUrl: string;
-  filename: string;
-  fileSize: number;
+  items: UploadItem[];
   uploading: boolean;
+  canUpload: boolean;
   onConfirm: () => void;
   onRetake: () => void;
   onChoose: () => void;
+  onRemove: (id: string) => void;
+  onDateChange: (id: string, value: string) => void;
   error: string | null;
 }) {
+  const adjusted = items.filter((item) => item.adjusted).length;
+  const loading = items.some((item) => item.metadataLoading);
+  const blocked = items.some((item) => !item.supported);
+
   return (
     <div className="space-y-3">
-      <Panel className="overflow-hidden p-0">
-        <div className="relative aspect-square w-full bg-ink">
-          <img src={previewUrl} alt="Preview" className="h-full w-full object-cover" />
-          <FrameOverlay />
+      <Panel>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-black text-ink">Review assigned dates</h2>
+            <p className="mt-1 text-sm font-semibold leading-5 text-ink/60">
+              Each photo will land on the calendar date shown below.
+            </p>
+          </div>
+          <Badge tone={blocked ? "bad" : loading ? "warn" : "good"}>{items.length} selected</Badge>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {loading ? <Badge tone="warn">Reading metadata</Badge> : <Badge tone="good">Metadata ready</Badge>}
+          {adjusted ? <Badge>{adjusted} adjusted</Badge> : null}
+          {blocked ? <Badge tone="bad">Remove unsupported files</Badge> : null}
         </div>
       </Panel>
-      <div className="space-y-1 text-sm font-semibold text-ink/65">
-        <div className="truncate font-mono text-xs text-ink/45">{filename}</div>
-        <div className="text-xs">{(fileSize / 1024).toFixed(0)} KB</div>
+
+      <div className="space-y-3">
+        {items.map((item) => (
+          <UploadReviewCard
+            key={item.id}
+            item={item}
+            disabled={uploading}
+            onRemove={() => onRemove(item.id)}
+            onDateChange={(value) => onDateChange(item.id, value)}
+          />
+        ))}
       </div>
+
       <div className="grid grid-cols-1 gap-2">
-        <Button onClick={onConfirm} disabled={uploading}>
+        <Button onClick={onConfirm} disabled={uploading || !canUpload}>
           {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <CheckCircle2 className="h-5 w-5" />}
-          {uploading ? "Uploading..." : "Use this photo"}
+          {uploading ? "Uploading..." : items.length === 1 ? "Use this photo" : `Upload ${items.length} photos`}
         </Button>
         <div className="grid grid-cols-2 gap-2">
           <Button variant="secondary" disabled={uploading} onClick={onRetake}>
             <RefreshCw className="h-4 w-4" />
-            Retake
+            Camera
           </Button>
           <Button variant="secondary" disabled={uploading} onClick={onChoose}>
             <ImagePlus className="h-4 w-4" />
@@ -296,31 +441,112 @@ function PreviewStep({
   );
 }
 
+function UploadReviewCard({
+  item,
+  disabled,
+  onRemove,
+  onDateChange,
+}: {
+  item: UploadItem;
+  disabled: boolean;
+  onRemove: () => void;
+  onDateChange: (value: string) => void;
+}) {
+  return (
+    <Panel className={cn("p-3", !item.supported && "border border-coral/35 bg-coral/10")}>
+      <div className="grid grid-cols-[5.5rem_1fr] gap-3">
+        <div className="relative aspect-square overflow-hidden rounded-md bg-ink">
+          <img src={item.previewUrl} alt="" className="h-full w-full object-cover" />
+          {item.metadataLoading ? (
+            <div className="absolute inset-0 grid place-items-center bg-ink/45 text-paper">
+              <Loader2 className="h-5 w-5 animate-spin" />
+            </div>
+          ) : null}
+        </div>
+        <div className="min-w-0">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="truncate font-mono text-xs font-bold text-ink/55">{item.filename}</div>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                <Badge tone={item.supported ? "default" : "bad"}>{formatFileSize(item.fileSize)}</Badge>
+                {item.width && item.height ? <Badge>{item.width}x{item.height}</Badge> : null}
+                {item.capturedAtSource ? <Badge tone={sourceTone(item.capturedAtSource)}>{sourceLabel(item.capturedAtSource)}</Badge> : null}
+                {item.adjusted ? <Badge tone="warn">Adjusted</Badge> : null}
+              </div>
+            </div>
+            <Button size="icon" variant="ghost" onClick={onRemove} disabled={disabled} aria-label={`Remove ${item.filename}`}>
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
+
+          <div className="mt-3 space-y-1">
+            <Label>Assigned date and time</Label>
+            <div className="relative">
+              <Calendar className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink/35" />
+              <Input
+                type="datetime-local"
+                step={1}
+                value={item.capturedAtLocal}
+                onChange={(event) => onDateChange(event.target.value)}
+                disabled={disabled || item.metadataLoading}
+                className="pl-9"
+              />
+            </div>
+          </div>
+
+          {item.cameraMake || item.cameraModel ? (
+            <div className="mt-2 truncate text-xs font-semibold text-ink/50">
+              {[item.cameraMake, item.cameraModel].filter(Boolean).join(" ")}
+            </div>
+          ) : null}
+          {item.error ? (
+            <div className="mt-2 text-xs font-bold leading-5 text-coral">{item.error}</div>
+          ) : item.warnings.length ? (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {item.warnings.slice(0, 3).map((warning) => (
+                <Badge key={warning} tone="warn">
+                  {humanWarning(warning)}
+                </Badge>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
 function ResultStep({
-  previewUrl,
+  items,
   job,
   result,
   onRetake,
+  onChoose,
   onDone,
   error,
 }: {
-  previewUrl: string;
+  items: UploadItem[];
   job: JobStatus | null;
-  result: { skipped?: boolean; skip_reason?: string | null; quality_score?: number | null; aligned?: boolean; duplicate_of?: string | null; replaced_count?: number | null } | null;
+  result: Required<Pick<BatchResult, "photos">> & { total: number; succeeded: number; failed: number };
   onRetake: () => void;
+  onChoose: () => void;
   onDone: () => void;
   error: string | null;
 }) {
   const isRunning = !job || ["queued", "running"].includes(job.status);
   const isDone = job?.status === "done";
   const isProblem = job?.status === "failed" || job?.status === "cancelled";
-  const skipped = isDone && result?.skipped;
+  const flagged = result.photos.filter((photo) => photo.skipped && !photo.error).length;
+  const failed = result.failed;
 
   return (
     <div className="space-y-3">
       <Panel className="overflow-hidden p-0">
-        <div className="relative aspect-square w-full bg-ink">
-          <img src={previewUrl} alt="Preview" className={cn("h-full w-full object-cover", isRunning && "opacity-70")} />
+        <div className={cn("relative grid aspect-square w-full bg-ink", items.length === 1 ? "grid-cols-1" : "grid-cols-2")}>
+          {items.slice(0, 4).map((item) => (
+            <img key={item.id} src={item.previewUrl} alt="" className={cn("h-full w-full object-cover", isRunning && "opacity-70")} />
+          ))}
+          {items.length === 1 ? <FrameOverlay /> : null}
           {isRunning ? (
             <div className="absolute inset-0 flex items-center justify-center bg-ink/45 text-paper">
               <div className="flex items-center gap-3 rounded-md bg-ink/80 px-3 py-2 text-sm font-black backdrop-blur">
@@ -334,57 +560,44 @@ function ResultStep({
       <Panel>
         {isRunning ? (
           <div>
-            <div className="text-sm font-black text-ink">Adding to your timelapse</div>
-            <p className="mt-1 text-xs font-semibold leading-5 text-ink/55">{job?.message ?? "Hashing the photo and finding your face"}</p>
+            <div className="text-sm font-black text-ink">{items.length === 1 ? "Adding to your timelapse" : "Adding photos to your timelapse"}</div>
+            <p className="mt-1 text-xs font-semibold leading-5 text-ink/55">{job?.message ?? "Hashing photos and finding faces"}</p>
             <div className="mt-3">
               <ProgressBar value={job?.progress ?? 0.1} />
             </div>
             <div className="mt-2 text-[0.7rem] font-bold uppercase tracking-[0.12em] text-ink/45">
-              {humanizeStage(job?.stage) ?? "Step 1 of 4"}
+              {humanizeStage(job?.stage) ?? "Preparing"}
             </div>
           </div>
         ) : null}
-        {isDone && !skipped ? (
+        {isDone ? (
           <div>
             <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-teal" />
-              <h3 className="text-lg font-black text-ink">Locked in for today</h3>
+              {failed ? <AlertTriangle className="h-5 w-5 text-coral" /> : <CheckCircle2 className="h-5 w-5 text-teal" />}
+              <h3 className="text-lg font-black text-ink">{failed ? "Upload finished with issues" : "Photos added"}</h3>
             </div>
-            <p className="mt-1 text-sm font-semibold text-ink/65">
-              The auto-render will fold this frame into the next video.
-            </p>
             <div className="mt-3 flex flex-wrap gap-2">
-              {result?.quality_score != null ? <Badge tone="good">Quality {result.quality_score.toFixed(2)}</Badge> : null}
-              {result?.aligned ? <Badge>Aligned</Badge> : <Badge tone="warn">Will align overnight</Badge>}
-              {result?.duplicate_of ? <Badge tone="warn">Duplicate of older photo</Badge> : null}
-              {result?.replaced_count ? <Badge tone="good">Replaced earlier take</Badge> : null}
+              <Badge tone="good">{result.succeeded} saved</Badge>
+              {flagged ? <Badge tone="warn">{flagged} flagged</Badge> : null}
+              {failed ? <Badge tone="bad">{failed} failed</Badge> : null}
+            </div>
+            <div className="mt-4 space-y-2">
+              {result.photos.map((photo, index) => (
+                <ResultRow key={`${photo.hash ?? photo.filename ?? "photo"}-${index}`} photo={photo} />
+              ))}
             </div>
             <div className="mt-4 grid grid-cols-1 gap-2">
               <Button onClick={onDone}>Done</Button>
-              <Button variant="secondary" onClick={onRetake}>
-                <RefreshCw className="h-4 w-4" />
-                Retake instead
-              </Button>
-            </div>
-          </div>
-        ) : null}
-        {isDone && skipped ? (
-          <div>
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-coral" />
-              <h3 className="text-lg font-black text-ink">Saved, but flagged</h3>
-            </div>
-            <p className="mt-1 text-sm font-semibold leading-5 text-ink/65">
-              {humanSkipReason(result?.skip_reason)}. The auto-render will skip this one. Try a retake or open Review to keep it anyway.
-            </p>
-            <div className="mt-4 grid grid-cols-1 gap-2">
-              <Button onClick={onRetake}>
-                <RefreshCw className="h-4 w-4" />
-                Retake
-              </Button>
-              <Button variant="secondary" onClick={onDone}>
-                Keep as-is for now
-              </Button>
+              <div className="grid grid-cols-2 gap-2">
+                <Button variant="secondary" onClick={onChoose}>
+                  <ImagePlus className="h-4 w-4" />
+                  Library
+                </Button>
+                <Button variant="secondary" onClick={onRetake}>
+                  <RefreshCw className="h-4 w-4" />
+                  Camera
+                </Button>
+              </div>
             </div>
           </div>
         ) : null}
@@ -398,7 +611,7 @@ function ResultStep({
               {error ?? job?.error ?? "Something went wrong while saving the photo."}
             </p>
             <div className="grid grid-cols-1 gap-2">
-              <Button onClick={onRetake}>Try again</Button>
+              <Button onClick={onChoose}>Try again</Button>
               <Button variant="secondary" onClick={onDone}>
                 Back to today
               </Button>
@@ -406,6 +619,31 @@ function ResultStep({
           </div>
         ) : null}
       </Panel>
+    </div>
+  );
+}
+
+function ResultRow({ photo }: { photo: BatchPhotoResult }) {
+  const hasError = Boolean(photo.error);
+  return (
+    <div className="rounded-md border border-ink/10 bg-white p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate font-mono text-xs font-bold text-ink/55">{photo.filename ?? photo.hash ?? "photo"}</div>
+          <div className="mt-1 text-sm font-black text-ink">{photo.captured_at ? formatAssignedDate(photo.captured_at) : hasError ? "Not saved" : "Saved"}</div>
+        </div>
+        {hasError ? <Badge tone="bad">Failed</Badge> : photo.skipped ? <Badge tone="warn">{humanSkipReason(photo.skip_reason)}</Badge> : <Badge tone="good">Included</Badge>}
+      </div>
+      {!hasError ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {photo.quality_score != null ? <Badge tone="good">Quality {photo.quality_score.toFixed(2)}</Badge> : null}
+          {photo.aligned ? <Badge>Aligned</Badge> : <Badge tone="warn">Will align overnight</Badge>}
+          {photo.duplicate_of ? <Badge tone="warn">Duplicate</Badge> : null}
+          {photo.replaced_count ? <Badge tone="good">Replaced earlier take</Badge> : null}
+        </div>
+      ) : (
+        <div className="mt-2 text-xs font-bold leading-5 text-coral">{photo.error}</div>
+      )}
     </div>
   );
 }
@@ -420,12 +658,99 @@ function FrameOverlay() {
   );
 }
 
+function createUploadItem(file: File, index: number): UploadItem {
+  return {
+    id: `${Date.now()}-${index}-${file.name}-${file.size}`,
+    index,
+    file,
+    previewUrl: URL.createObjectURL(file),
+    filename: file.name || `photo-${index + 1}.jpg`,
+    fileSize: file.size,
+    capturedAtLocal: "",
+    originalCapturedAtLocal: null,
+    capturedAtSource: null,
+    cameraMake: null,
+    cameraModel: null,
+    width: null,
+    height: null,
+    warnings: [],
+    metadataLoading: true,
+    supported: true,
+    error: null,
+    adjusted: false,
+  };
+}
+
+function applyPreviewItem(item: UploadItem, preview: CapturePreviewItem | undefined): UploadItem {
+  if (!preview) {
+    return {
+      ...item,
+      capturedAtLocal: item.capturedAtLocal || datetimeToLocalInput(new Date()),
+      originalCapturedAtLocal: item.originalCapturedAtLocal,
+      metadataLoading: false,
+      error: item.error ?? "Metadata preview did not return this photo",
+    };
+  }
+  const capturedAtLocal = preview.captured_at ? isoLikeToLocalInput(preview.captured_at) : item.capturedAtLocal || datetimeToLocalInput(new Date());
+  return {
+    ...item,
+    filename: preview.filename || item.filename,
+    fileSize: preview.file_size,
+    capturedAtLocal,
+    originalCapturedAtLocal: capturedAtLocal,
+    capturedAtSource: preview.captured_at_source,
+    cameraMake: preview.camera_make,
+    cameraModel: preview.camera_model,
+    width: preview.width,
+    height: preview.height,
+    warnings: preview.warnings ?? [],
+    metadataLoading: false,
+    supported: preview.supported,
+    error: preview.error,
+    adjusted: false,
+  };
+}
+
+function normalizeResult(result: BatchResult | null, items: UploadItem[]): Required<Pick<BatchResult, "photos">> & { total: number; succeeded: number; failed: number } {
+  if (result?.photos) {
+    return {
+      photos: result.photos,
+      total: result.total ?? result.photos.length,
+      succeeded: result.succeeded ?? result.photos.filter((photo) => !photo.error).length,
+      failed: result.failed ?? result.photos.filter((photo) => photo.error).length,
+    };
+  }
+  if (!result) {
+    return { photos: [], total: items.length, succeeded: 0, failed: 0 };
+  }
+  return {
+    photos: [
+      {
+        filename: items[0]?.filename,
+        skipped: result.skipped,
+        skip_reason: result.skip_reason,
+        quality_score: result.quality_score,
+        aligned: result.aligned,
+        duplicate_of: result.duplicate_of,
+        replaced_count: result.replaced_count,
+      },
+    ],
+    total: 1,
+    succeeded: 1,
+    failed: 0,
+  };
+}
+
+function revokeUploadItems(items: UploadItem[]) {
+  items.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+}
+
 function stepLabel(step: CaptureStep) {
   switch (step) {
     case "pick":
       return "Step 1 · Capture";
     case "preview":
-      return "Step 2 · Confirm";
+      return "Step 2 · Review";
     case "uploading":
       return "Step 3 · Uploading";
     case "result":
@@ -446,14 +771,78 @@ function humanizeStage(stage: string | null | undefined) {
 }
 
 function humanSkipReason(reason: string | null | undefined) {
-  if (!reason) return "Quality check did not pass";
+  if (!reason) return "Flagged";
   const labels: Record<string, string> = {
-    no_face_detected: "We could not see a face",
-    landmarks_unavailable: "We saw a face but no detailed map",
-    low_quality: "The frame did not pass the quality check",
-    landmark_outlier: "Frame is far from the average face",
-    user_skipped: "Manually marked as not included",
-    replaced_by_newer_capture: "Replaced by a newer take",
+    no_face_detected: "No face",
+    landmarks_unavailable: "No face map",
+    low_quality: "Low quality",
+    landmark_outlier: "Outlier",
+    user_skipped: "Not included",
+    replaced_by_newer_capture: "Replaced",
   };
   return labels[reason] ?? reason;
+}
+
+function humanWarning(warning: string) {
+  const labels: Record<string, string> = {
+    missing_datetime_original: "No original date",
+    datetime_from_filename: "Date from filename",
+    datetime_from_file_modified_time: "Date fallback",
+    datetime_from_exif_datetime: "Date from EXIF",
+    filename_datetime_differs_from_exif: "Filename differs",
+    exif_datetime_ignored_for_filename: "EXIF date ignored",
+    captured_at_user_override: "Date adjusted",
+    preview_failed: "Preview failed",
+  };
+  return labels[warning] ?? warning.split("_").join(" ");
+}
+
+function sourceLabel(source: string) {
+  const labels: Record<string, string> = {
+    exif_datetime_original: "EXIF original",
+    exif_datetime: "EXIF date",
+    filename: "Filename",
+    file_modified_time: "File time",
+    user_override: "Adjusted",
+  };
+  return labels[source] ?? source.split("_").join(" ");
+}
+
+function sourceTone(source: string): "default" | "good" | "warn" | "bad" {
+  if (source === "exif_datetime_original") return "good";
+  if (source === "filename" || source === "exif_datetime") return "default";
+  if (source === "file_modified_time") return "warn";
+  return "default";
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+function isoLikeToLocalInput(value: string) {
+  const normalized = value.replace(" ", "T");
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return normalized.slice(0, 16);
+  return datetimeToLocalInput(date);
+}
+
+function datetimeToLocalInput(date: Date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  const h = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
+  const sec = String(date.getSeconds()).padStart(2, "0");
+  return `${y}-${m}-${d}T${h}:${min}:${sec}`;
+}
+
+function datetimeLocalToIso(value: string) {
+  return value.length === 16 ? `${value}:00` : value;
+}
+
+function formatAssignedDate(value: string) {
+  const date = new Date(value.replace(" ", "T"));
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
