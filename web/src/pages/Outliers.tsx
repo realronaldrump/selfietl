@@ -281,8 +281,8 @@ function explainReview(photo: Photo): ReviewExplanation {
     issues.push({
       kind: "manual",
       title: "Manual choice",
-      value: "Not included",
-      detail: "This was manually marked as not included. You can include it again if it belongs in the video.",
+      value: "Excluded",
+      detail: "This was manually excluded. You can include it again if it belongs in the video.",
     });
   }
 
@@ -300,7 +300,7 @@ function explainReview(photo: Photo): ReviewExplanation {
       kind: "score",
       title: "Review",
       value: humanReason(reason),
-      detail: "This photo is currently not included. Include it only if it looks like a stable selfie.",
+      detail: "This photo is currently excluded. Include it only if it looks like a stable selfie.",
     });
   }
 
@@ -337,7 +337,7 @@ function summaryFor(kind: ReviewIssue["kind"], issues: ReviewIssue[]) {
     pose: first?.detail ?? "The head angle is outside the steady range.",
     eyes: "The eye-open check is below the threshold, so this frame may look like a blink.",
     drift: "The face map is too different from the project average and may cause a visible jump.",
-    manual: "This photo is not included because it was manually marked that way.",
+    manual: "This photo is excluded because it was manually marked that way.",
   };
   return summaries[kind];
 }
@@ -354,7 +354,7 @@ function humanReason(reason: string) {
     landmarks_unavailable: "Face map missing",
     low_quality: "Low face score",
     landmark_outlier: "Face map drift",
-    user_skipped: "Manually not included",
+    user_skipped: "Manually excluded",
     replaced_by_newer_capture: "Replaced by newer take",
     review: "Needs review",
   };

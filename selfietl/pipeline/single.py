@@ -27,6 +27,9 @@ from selfietl.pipeline.score import compute_quality_score
 Progress = Callable[[str, int, int, str], None]
 CancelCheck = Callable[[], None]
 
+DUPLICATE_SKIP_REASON = "duplicate_upload"
+PERCEPTUAL_DUPLICATE_MAX_DISTANCE = 4
+
 
 def import_to_inbox(
     config: AppConfig,
@@ -83,17 +86,44 @@ def process_single_photo(
     if captured_at is not None:
         meta = _with_captured_at_override(meta, captured_at)
     phash = perceptual_hash(source_path)
+    size = file_size(source_path)
 
-    duplicate_of: str | None = None
+    duplicate: dict | None = None
+    already_cataloged = False
     with db.connect() as conn:
-        existing = conn.execute("SELECT hash FROM photos WHERE hash = ?", (photo_hash,)).fetchone()
-        if existing is None and phash:
-            phash_match = conn.execute(
-                "SELECT hash FROM photos WHERE perceptual_hash = ? LIMIT 1", (phash,)
-            ).fetchone()
-            if phash_match:
-                duplicate_of = phash_match["hash"]
-        if existing is None:
+        existing = conn.execute("SELECT * FROM photos WHERE hash = ?", (photo_hash,)).fetchone()
+        if existing is not None and _same_path(existing["path"], source_path):
+            already_cataloged = True
+            conn.execute(
+                "INSERT OR IGNORE INTO project_photos (project_id, photo_hash, added_at) VALUES (?, ?, ?)",
+                (project_id, photo_hash, datetime.now().isoformat(sep=" ")),
+            )
+        else:
+            duplicate = _find_duplicate_upload(
+                conn,
+                project_id=project_id,
+                exact_row=existing,
+                captured_at=meta["captured_at"],
+                width=width,
+                height=height,
+                size=size,
+                camera_make=meta["camera_make"],
+                camera_model=meta["camera_model"],
+                perceptual_hash_value=phash,
+            )
+        if duplicate is not None:
+            conn.execute(
+                "INSERT OR IGNORE INTO project_photos (project_id, photo_hash, added_at) VALUES (?, ?, ?)",
+                (project_id, duplicate["hash"], datetime.now().isoformat(sep=" ")),
+            )
+            if duplicate["reason"] == "exact_file" and not _path_exists(duplicate.get("path")):
+                conn.execute(
+                    "UPDATE photos SET path = ? WHERE hash = ?",
+                    (str(source_path), duplicate["hash"]),
+                )
+                duplicate["path"] = str(source_path)
+                duplicate["kept_upload"] = True
+        elif not already_cataloged:
             conn.execute(
                 """
                 INSERT INTO photos (
@@ -107,7 +137,7 @@ def process_single_photo(
                     meta["captured_at"].isoformat(sep=" "),
                     width,
                     height,
-                    file_size(source_path),
+                    size,
                     meta["camera_make"],
                     meta["camera_model"],
                     phash,
@@ -115,16 +145,17 @@ def process_single_photo(
                 ),
             )
             write_thumbnail(source_path, config.thumbs_dir / f"{photo_hash}.jpg")
-        else:
             conn.execute(
-                "UPDATE photos SET path = ? WHERE hash = ?",
-                (str(source_path), photo_hash),
+                "INSERT OR IGNORE INTO project_photos (project_id, photo_hash, added_at) VALUES (?, ?, ?)",
+                (project_id, photo_hash, datetime.now().isoformat(sep=" ")),
             )
 
-        conn.execute(
-            "INSERT OR IGNORE INTO project_photos (project_id, photo_hash, added_at) VALUES (?, ?, ?)",
-            (project_id, photo_hash, datetime.now().isoformat(sep=" ")),
-        )
+    if duplicate is not None:
+        if not duplicate.get("kept_upload"):
+            _remove_duplicate_upload(config, source_path, duplicate.get("path"))
+        if progress:
+            progress("capture", 5, 5, "Duplicate photo skipped")
+        return _duplicate_upload_result(duplicate, config, meta, source_path)
 
     if progress:
         progress("capture", 2, 5, "Finding face landmarks")
@@ -150,7 +181,7 @@ def process_single_photo(
             "captured_at": meta["captured_at"].isoformat(sep=" "),
             "skipped": True,
             "skip_reason": skip_reason,
-            "duplicate_of": duplicate_of,
+            "duplicate_of": None,
             "aligned": False,
             "warnings": detection.warnings,
             "path": str(source_path),
@@ -243,7 +274,7 @@ def process_single_photo(
         "captured_at": meta["captured_at"].isoformat(sep=" "),
         "skipped": should_skip,
         "skip_reason": skip_reason,
-        "duplicate_of": duplicate_of,
+        "duplicate_of": None,
         "aligned": aligned,
         "replaced_count": replaced_count,
         "quality_score": quality,
@@ -325,6 +356,159 @@ def _with_captured_at_override(meta: dict, captured_at: datetime) -> dict:
     updated["captured_at_source"] = "user_override"
     updated["warnings"] = warnings
     return updated
+
+
+def _find_duplicate_upload(
+    conn: sqlite3.Connection,
+    *,
+    project_id: int,
+    exact_row: sqlite3.Row | None,
+    captured_at: datetime,
+    width: int,
+    height: int,
+    size: int,
+    camera_make: str | None,
+    camera_model: str | None,
+    perceptual_hash_value: str | None,
+) -> dict | None:
+    if exact_row is not None:
+        return _duplicate_match(exact_row, "exact_file")
+
+    rows = conn.execute(
+        """
+        SELECT p.*
+        FROM photos p
+        JOIN project_photos pp ON pp.photo_hash = p.hash
+        WHERE pp.project_id = ?
+          AND date(p.captured_at) = ?
+          AND (
+            p.perceptual_hash IS NOT NULL
+            OR (p.width = ? AND p.height = ? AND p.file_size = ?)
+          )
+        ORDER BY p.captured_at DESC
+        """,
+        (project_id, captured_at.date().isoformat(), width, height, size),
+    ).fetchall()
+    for row in rows:
+        if not _path_exists(row["path"]):
+            continue
+        row_captured_at = _row_datetime(row["captured_at"])
+        same_time = row_captured_at is not None and abs((row_captured_at - captured_at).total_seconds()) <= 1
+        same_dimensions = int(row["width"] or -1) == width and int(row["height"] or -1) == height
+        if (
+            same_time
+            and same_dimensions
+            and perceptual_hash_value
+            and row["perceptual_hash"]
+            and _perceptual_hash_distance(str(row["perceptual_hash"]), perceptual_hash_value)
+            <= PERCEPTUAL_DUPLICATE_MAX_DISTANCE
+        ):
+            return _duplicate_match(row, "same_photo")
+        if (
+            same_time
+            and same_dimensions
+            and int(row["file_size"] or -1) == size
+            and _same_text(row["camera_make"], camera_make)
+            and _same_text(row["camera_model"], camera_model)
+        ):
+            return _duplicate_match(row, "same_metadata")
+    return None
+
+
+def _duplicate_match(row: sqlite3.Row, reason: str) -> dict:
+    result = {key: row[key] for key in row.keys()}
+    result["reason"] = reason
+    return result
+
+
+def _duplicate_upload_result(match: dict, config: AppConfig, meta: dict, source_path: Path) -> dict:
+    photo_hash = str(match["hash"])
+    warnings = list(meta.get("warnings") or [])
+    duplicate_warning = f"duplicate_{match['reason']}"
+    if duplicate_warning not in warnings:
+        warnings.append(duplicate_warning)
+    captured_at = _row_datetime(match.get("captured_at")) or meta["captured_at"]
+    return {
+        "hash": photo_hash,
+        "captured_at": captured_at.isoformat(sep=" "),
+        "skipped": True,
+        "skip_reason": DUPLICATE_SKIP_REASON,
+        "duplicate_of": photo_hash,
+        "duplicate_reason": match["reason"],
+        "aligned": _has_aligned_photo(config, photo_hash),
+        "replaced_count": 0,
+        "quality_score": match.get("quality_score"),
+        "yaw": match.get("yaw"),
+        "pitch": match.get("pitch"),
+        "roll": match.get("roll"),
+        "eye_open_ratio": match.get("eye_open_ratio"),
+        "warnings": warnings,
+        "path": match.get("path") or str(source_path),
+    }
+
+
+def _remove_duplicate_upload(config: AppConfig, source_path: Path, duplicate_path: str | None) -> None:
+    if not _is_inside(config.inbox_dir, source_path):
+        return
+    try:
+        if duplicate_path and source_path.resolve() == Path(duplicate_path).resolve():
+            return
+        source_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _has_aligned_photo(config: AppConfig, photo_hash: str) -> bool:
+    return any((config.aligned_dir / f"{photo_hash}.{suffix}").exists() for suffix in ("jpg", "png"))
+
+
+def _path_exists(value: str | None) -> bool:
+    if not value:
+        return False
+    try:
+        return Path(value).is_file()
+    except OSError:
+        return False
+
+
+def _same_path(left: str | None, right: Path) -> bool:
+    if not left:
+        return False
+    try:
+        return Path(left).resolve() == right.resolve()
+    except OSError:
+        return False
+
+
+def _row_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _perceptual_hash_distance(left: str, right: str) -> int:
+    if len(left) != len(right):
+        return PERCEPTUAL_DUPLICATE_MAX_DISTANCE + 1
+    try:
+        return (int(left, 16) ^ int(right, 16)).bit_count()
+    except ValueError:
+        return PERCEPTUAL_DUPLICATE_MAX_DISTANCE + 1
+
+
+def _same_text(left: object, right: object) -> bool:
+    return _normalized_text(left) == _normalized_text(right)
+
+
+def _normalized_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().casefold()
+    return text or None
 
 
 def _is_inside(root: Path, candidate: Path) -> bool:

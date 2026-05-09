@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS renders (
 
 CREATE INDEX IF NOT EXISTS idx_photos_captured ON photos(captured_at);
 CREATE INDEX IF NOT EXISTS idx_photos_skipped ON photos(skipped);
+CREATE INDEX IF NOT EXISTS idx_photos_perceptual_hash ON photos(perceptual_hash);
 CREATE INDEX IF NOT EXISTS idx_project_photos_project ON project_photos(project_id);
 CREATE INDEX IF NOT EXISTS idx_renders_project ON renders(project_id);
 """

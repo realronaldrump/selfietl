@@ -176,6 +176,7 @@ async def capture_photo_batch(
         results = []
         succeeded = 0
         failed = 0
+        duplicates = 0
         total_steps = max(1, len(saved) * 5)
         for item_index, item in enumerate(saved):
             cancel_check()
@@ -200,6 +201,8 @@ async def capture_photo_batch(
                 )
                 result.update({"index": item["index"], "filename": item["filename"]})
                 results.append(result)
+                if result.get("duplicate_of"):
+                    duplicates += 1
                 succeeded += 1
             except Exception as exc:
                 failed += 1
@@ -216,6 +219,7 @@ async def capture_photo_batch(
             "total": len(saved),
             "succeeded": succeeded,
             "failed": failed,
+            "duplicates": duplicates,
         }
 
     try:

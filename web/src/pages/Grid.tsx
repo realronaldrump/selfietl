@@ -30,7 +30,7 @@ export function Grid({ project, mode = "all" }: { project: Project; mode?: GridM
   const pageTitle = mode === "included" ? "Included photos" : "All photos";
   const pageDescription =
     mode === "included"
-      ? "Only photos currently used for the face anchor and final video. Mark anything questionable as not included."
+      ? "Only photos currently used for the face anchor and final video. Exclude anything questionable."
       : "Every cataloged photo, sorted by the capture date the app found from EXIF or the AgeLapse filename.";
 
   useEffect(() => {

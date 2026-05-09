@@ -48,6 +48,7 @@ type BatchPhotoResult = {
   quality_score?: number | null;
   aligned?: boolean;
   duplicate_of?: string | null;
+  duplicate_reason?: string | null;
   replaced_count?: number | null;
   warnings?: string[];
   error?: string;
@@ -58,11 +59,13 @@ type BatchResult = {
   total?: number;
   succeeded?: number;
   failed?: number;
+  duplicates?: number;
   skipped?: boolean;
   skip_reason?: string | null;
   quality_score?: number | null;
   aligned?: boolean;
   duplicate_of?: string | null;
+  duplicate_reason?: string | null;
   replaced_count?: number | null;
 };
 
@@ -527,7 +530,7 @@ function ResultStep({
 }: {
   items: UploadItem[];
   job: JobStatus | null;
-  result: Required<Pick<BatchResult, "photos">> & { total: number; succeeded: number; failed: number };
+  result: Required<Pick<BatchResult, "photos">> & { total: number; succeeded: number; failed: number; duplicates: number };
   onRetake: () => void;
   onChoose: () => void;
   onDone: () => void;
@@ -536,7 +539,9 @@ function ResultStep({
   const isRunning = !job || ["queued", "running"].includes(job.status);
   const isDone = job?.status === "done";
   const isProblem = job?.status === "failed" || job?.status === "cancelled";
-  const flagged = result.photos.filter((photo) => photo.skipped && !photo.error).length;
+  const duplicates = result.duplicates ?? result.photos.filter((photo) => photo.duplicate_of && !photo.error).length;
+  const saved = Math.max(0, result.succeeded - duplicates);
+  const flagged = result.photos.filter((photo) => photo.skipped && !photo.error && !photo.duplicate_of).length;
   const failed = result.failed;
 
   return (
@@ -577,7 +582,8 @@ function ResultStep({
               <h3 className="text-lg font-black text-ink">{failed ? "Upload finished with issues" : "Photos added"}</h3>
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
-              <Badge tone="good">{result.succeeded} saved</Badge>
+              <Badge tone="good">{saved} saved</Badge>
+              {duplicates ? <Badge tone="warn">{duplicates} duplicate{duplicates === 1 ? "" : "s"}</Badge> : null}
               {flagged ? <Badge tone="warn">{flagged} flagged</Badge> : null}
               {failed ? <Badge tone="bad">{failed} failed</Badge> : null}
             </div>
@@ -625,20 +631,20 @@ function ResultStep({
 
 function ResultRow({ photo }: { photo: BatchPhotoResult }) {
   const hasError = Boolean(photo.error);
+  const isDuplicate = Boolean(photo.duplicate_of);
   return (
     <div className="rounded-md border border-ink/10 bg-white p-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate font-mono text-xs font-bold text-ink/55">{photo.filename ?? photo.hash ?? "photo"}</div>
-          <div className="mt-1 text-sm font-black text-ink">{photo.captured_at ? formatAssignedDate(photo.captured_at) : hasError ? "Not saved" : "Saved"}</div>
+          <div className="mt-1 text-sm font-black text-ink">{photo.captured_at ? formatAssignedDate(photo.captured_at) : hasError || isDuplicate ? "Not saved" : "Saved"}</div>
         </div>
-        {hasError ? <Badge tone="bad">Failed</Badge> : photo.skipped ? <Badge tone="warn">{humanSkipReason(photo.skip_reason)}</Badge> : <Badge tone="good">Included</Badge>}
+        {hasError ? <Badge tone="bad">Failed</Badge> : isDuplicate ? <Badge tone="warn">Duplicate</Badge> : photo.skipped ? <Badge tone="warn">{humanSkipReason(photo.skip_reason)}</Badge> : <Badge tone="good">Included</Badge>}
       </div>
       {!hasError ? (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {photo.quality_score != null ? <Badge tone="good">Quality {photo.quality_score.toFixed(2)}</Badge> : null}
-          {photo.aligned ? <Badge>Aligned</Badge> : <Badge tone="warn">Will align overnight</Badge>}
-          {photo.duplicate_of ? <Badge tone="warn">Duplicate</Badge> : null}
+          {isDuplicate ? <Badge tone="warn">Already in timeline</Badge> : photo.aligned ? <Badge>Aligned</Badge> : <Badge tone="warn">Will align overnight</Badge>}
           {photo.replaced_count ? <Badge tone="good">Replaced earlier take</Badge> : null}
         </div>
       ) : (
@@ -711,17 +717,18 @@ function applyPreviewItem(item: UploadItem, preview: CapturePreviewItem | undefi
   };
 }
 
-function normalizeResult(result: BatchResult | null, items: UploadItem[]): Required<Pick<BatchResult, "photos">> & { total: number; succeeded: number; failed: number } {
+function normalizeResult(result: BatchResult | null, items: UploadItem[]): Required<Pick<BatchResult, "photos">> & { total: number; succeeded: number; failed: number; duplicates: number } {
   if (result?.photos) {
     return {
       photos: result.photos,
       total: result.total ?? result.photos.length,
       succeeded: result.succeeded ?? result.photos.filter((photo) => !photo.error).length,
       failed: result.failed ?? result.photos.filter((photo) => photo.error).length,
+      duplicates: result.duplicates ?? result.photos.filter((photo) => photo.duplicate_of && !photo.error).length,
     };
   }
   if (!result) {
-    return { photos: [], total: items.length, succeeded: 0, failed: 0 };
+    return { photos: [], total: items.length, succeeded: 0, failed: 0, duplicates: 0 };
   }
   return {
     photos: [
@@ -732,12 +739,14 @@ function normalizeResult(result: BatchResult | null, items: UploadItem[]): Requi
         quality_score: result.quality_score,
         aligned: result.aligned,
         duplicate_of: result.duplicate_of,
+        duplicate_reason: result.duplicate_reason,
         replaced_count: result.replaced_count,
       },
     ],
     total: 1,
     succeeded: 1,
     failed: 0,
+    duplicates: result.duplicate_of ? 1 : 0,
   };
 }
 
@@ -779,6 +788,7 @@ function humanSkipReason(reason: string | null | undefined) {
     landmark_outlier: "Outlier",
     user_skipped: "Not included",
     replaced_by_newer_capture: "Replaced",
+    duplicate_upload: "Duplicate",
   };
   return labels[reason] ?? reason;
 }
@@ -792,6 +802,9 @@ function humanWarning(warning: string) {
     filename_datetime_differs_from_exif: "Filename differs",
     exif_datetime_ignored_for_filename: "EXIF date ignored",
     captured_at_user_override: "Date adjusted",
+    duplicate_exact_file: "Duplicate file",
+    duplicate_same_photo: "Duplicate photo",
+    duplicate_same_metadata: "Duplicate metadata",
     preview_failed: "Preview failed",
   };
   return labels[warning] ?? warning.split("_").join(" ");

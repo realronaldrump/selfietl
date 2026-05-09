@@ -338,7 +338,7 @@ function humanSkipReason(reason: string | null) {
     landmarks_unavailable: "We saw a face but no detail map",
     low_quality: "The frame did not pass quality checks",
     landmark_outlier: "Frame is far from the average face",
-    user_skipped: "You marked this not included",
+    user_skipped: "You excluded this",
     replaced_by_newer_capture: "A newer take replaced this one",
   };
   return labels[reason] ?? "Needs review";
