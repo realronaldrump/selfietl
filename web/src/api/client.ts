@@ -252,7 +252,10 @@ export const api = {
     if (params.skipped !== null && params.skipped !== undefined) query.set("skipped", String(params.skipped));
     return fetchJson<PhotoList>(`/api/projects/${projectId}/photos?${query.toString()}`);
   },
-  patchPhoto: (hash: string, payload: { skipped?: boolean; user_override?: boolean; skip_reason?: string | null }) =>
+  patchPhoto: (
+    hash: string,
+    payload: { skipped?: boolean; user_override?: boolean; skip_reason?: string | null; captured_at?: string | null },
+  ) =>
     fetchJson<Photo>(`/api/photos/${hash}`, { method: "PATCH", body: JSON.stringify(payload) }),
   stats: (projectId: number) => fetchJson(`/api/projects/${projectId}/stats`),
   render: (projectId: number, payload: RenderConfig) =>

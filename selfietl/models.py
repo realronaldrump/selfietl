@@ -61,6 +61,7 @@ class PatchPhotoRequest(BaseModel):
     skipped: bool | None = None
     user_override: bool | None = None
     skip_reason: str | None = None
+    captured_at: str | None = None
 
 
 class StartJobResponse(BaseModel):

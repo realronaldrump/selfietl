@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -59,14 +61,23 @@ def patch_photo(photo_hash: str, payload: PatchPhotoRequest, db: Database = Depe
     skipped = row["skipped"] if payload.skipped is None else int(payload.skipped)
     user_override = row["user_override"] if payload.user_override is None else int(payload.user_override)
     skip_reason = payload.skip_reason
+    captured_at = row["captured_at"]
+    warnings_json = row["warnings_json"] if "warnings_json" in row.keys() else "[]"
     if payload.skipped is False:
         user_override = 1
         skip_reason = None
     elif payload.skipped is True and skip_reason is None:
         skip_reason = "user_skipped"
+    if payload.captured_at is not None:
+        captured_at = _parse_capture_datetime(payload.captured_at).isoformat(sep=" ")
+        user_override = 1
+        warnings = _parse_warnings(warnings_json)
+        if "captured_at_user_override" not in warnings:
+            warnings.append("captured_at_user_override")
+        warnings_json = json.dumps(warnings)
     db.execute(
-        "UPDATE photos SET skipped = ?, user_override = ?, skip_reason = ? WHERE hash = ?",
-        (skipped, user_override, skip_reason, photo_hash),
+        "UPDATE photos SET skipped = ?, user_override = ?, skip_reason = ?, captured_at = ?, warnings_json = ? WHERE hash = ?",
+        (skipped, user_override, skip_reason, captured_at, warnings_json, photo_hash),
     )
     updated = db.fetchone("SELECT * FROM photos WHERE hash = ?", (photo_hash,))
     return _photo_response(updated)
@@ -138,3 +149,25 @@ def _photo_response(row) -> PhotoResponse:
         thumb_url=f"/api/photos/{row['hash']}/thumb",
         image_url=f"/api/photos/{row['hash']}/image",
     )
+
+
+def _parse_capture_datetime(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone().replace(tzinfo=None)
+        return parsed
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid captured_at: {exc}") from exc
+
+
+def _parse_warnings(raw: object) -> list[str]:
+    if not isinstance(raw, str) or not raw:
+        return []
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [str(item) for item in payload]

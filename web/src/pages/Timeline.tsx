@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Eye,
+  Save,
   Trash2,
   XCircle,
 } from "lucide-react";
@@ -64,7 +65,7 @@ export function Timeline() {
       </Panel>
 
       {selectedDay ? (
-        <DaySheet day={selectedDay} onClose={() => setSelectedDay(null)} />
+        <DaySheet day={selectedDay} onClose={() => setSelectedDay(null)} onDateChanged={setSelectedDay} />
       ) : (
         <RecentList
           days={days}
@@ -189,7 +190,7 @@ function RecentList({
   );
 }
 
-function DaySheet({ day, onClose }: { day: string; onClose: () => void }) {
+function DaySheet({ day, onClose, onDateChanged }: { day: string; onClose: () => void; onDateChanged: (day: string) => void }) {
   const queryClient = useQueryClient();
   const dayQuery = useQuery({
     queryKey: ["day", day],
@@ -213,6 +214,20 @@ function DaySheet({ day, onClose }: { day: string; onClose: () => void }) {
       queryClient.invalidateQueries({ queryKey: ["day", day] });
       queryClient.invalidateQueries({ queryKey: ["calendar"] });
       queryClient.invalidateQueries({ queryKey: ["today"] });
+    },
+  });
+  const dateMutation = useMutation({
+    mutationFn: ({ hash, capturedAt }: { hash: string; capturedAt: string }) =>
+      api.patchPhoto(hash, { captured_at: capturedAt }),
+    onSuccess: (updated) => {
+      const nextDay = updated.captured_at.slice(0, 10);
+      queryClient.invalidateQueries({ queryKey: ["day", day] });
+      queryClient.invalidateQueries({ queryKey: ["calendar"] });
+      queryClient.invalidateQueries({ queryKey: ["today"] });
+      if (nextDay && nextDay !== day) {
+        queryClient.invalidateQueries({ queryKey: ["day", nextDay] });
+        onDateChanged(nextDay);
+      }
     },
   });
 
@@ -240,6 +255,8 @@ function DaySheet({ day, onClose }: { day: string; onClose: () => void }) {
             onToggle={() => includeMutation.mutate({ hash: photo.hash, skipped: !photo.skipped })}
             onDelete={() => deleteMutation.mutate(photo.hash)}
             deletePending={deleteMutation.isPending}
+            onDateSave={(capturedAt) => dateMutation.mutate({ hash: photo.hash, capturedAt })}
+            datePending={dateMutation.isPending}
           />
         )}
         {photos.length > 1 ? (
@@ -265,20 +282,32 @@ function DayPhotoView({
   onTogglePending,
   onDelete,
   deletePending,
+  onDateSave,
+  datePending,
 }: {
   photo: CapturedPhoto;
   onToggle: () => void;
   onTogglePending: boolean;
   onDelete: () => void;
   deletePending: boolean;
+  onDateSave: (capturedAt: string) => void;
+  datePending: boolean;
 }) {
   const [view, setView] = useState<"aligned" | "original">(photo.aligned_url ? "aligned" : "original");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const initialDateTime = capturedAtToInputs(photo.captured_at);
+  const [dateValue, setDateValue] = useState(initialDateTime.date);
+  const [timeValue, setTimeValue] = useState(initialDateTime.time);
   const src = view === "aligned" && photo.aligned_url ? photo.aligned_url : photo.image_url;
+  const nextCapturedAt = dateValue && timeValue ? `${dateValue}T${timeValue}:00` : "";
+  const capturedAtChanged = Boolean(nextCapturedAt) && nextCapturedAt !== capturedAtToLocalInput(photo.captured_at);
 
   useEffect(() => {
     setConfirmingDelete(false);
-  }, [photo.hash]);
+    const next = capturedAtToInputs(photo.captured_at);
+    setDateValue(next.date);
+    setTimeValue(next.time);
+  }, [photo.hash, photo.captured_at]);
 
   return (
     <div>
@@ -306,10 +335,38 @@ function DayPhotoView({
         ) : null}
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-semibold text-ink/55">
+        <Stat label="Captured" value={formatCapturedAt(photo.captured_at)} />
         <Stat label="Yaw" value={fmt(photo.yaw)} />
         <Stat label="Pitch" value={fmt(photo.pitch)} />
         <Stat label="Roll" value={fmt(photo.roll)} />
         <Stat label="Eye open" value={fmt(photo.eye_open_ratio)} />
+      </div>
+      <div className="mt-4 rounded-md border border-ink/10 bg-white p-3">
+        <div className="text-xs font-black uppercase tracking-[0.16em] text-ink/55">Capture date</div>
+        <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              type="date"
+              value={dateValue}
+              onChange={(event) => setDateValue(event.target.value)}
+              className="min-w-0 rounded-md border border-ink/10 bg-paper px-2 py-2 text-sm font-bold text-ink outline-none focus:border-teal"
+            />
+            <input
+              type="time"
+              value={timeValue}
+              onChange={(event) => setTimeValue(event.target.value)}
+              className="min-w-0 rounded-md border border-ink/10 bg-paper px-2 py-2 text-sm font-bold text-ink outline-none focus:border-teal"
+            />
+          </div>
+          <Button
+            size="sm"
+            onClick={() => onDateSave(nextCapturedAt)}
+            disabled={!capturedAtChanged || datePending}
+          >
+            <Save className="h-4 w-4" />
+            Save
+          </Button>
+        </div>
       </div>
       <div className="mt-4 grid grid-cols-2 gap-2">
         <Button variant="secondary" onClick={onToggle} disabled={onTogglePending}>
@@ -414,6 +471,22 @@ function formatLongDate(value: string) {
   const date = new Date(`${value}T00:00:00`);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+}
+
+function formatCapturedAt(value: string) {
+  const date = new Date(value.replace(" ", "T"));
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function capturedAtToInputs(value: string) {
+  const [date = "", rawTime = ""] = value.replace(" ", "T").split("T");
+  return { date, time: rawTime.slice(0, 5) };
+}
+
+function capturedAtToLocalInput(value: string) {
+  const { date, time } = capturedAtToInputs(value);
+  return date && time ? `${date}T${time}:00` : "";
 }
 
 function fmt(value: number | null | undefined) {
