@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Clapperboard, Eye, Film, Play, SlidersHorizontal, XCircle } from "lucide-react";
+import { Check, ChevronDown, Clapperboard, Eye, Film, MonitorSmartphone, Play, SlidersHorizontal, Sparkles, TimerReset, XCircle } from "lucide-react";
 import { api, type JobStatus, type Project, type RenderConfig } from "@/api/client";
 import { JobStatus as JobStatusPanel } from "@/components/JobStatus";
 import { Button, Input, Label, PageFrame, Panel, Select, cn } from "@/components/ui";
@@ -129,6 +129,24 @@ export function Render({ project }: { project: Project }) {
     });
   }
 
+  function applyMotion(profile: MotionProfile) {
+    const settings: Record<MotionProfile, Pick<RenderConfig, "morph_mode" | "intermediate_frames" | "fps">> = {
+      still: { morph_mode: "none", intermediate_frames: 0, fps: 15 },
+      natural: { morph_mode: "landmark_delaunay", intermediate_frames: 4, fps: 30 },
+      extra: { morph_mode: "landmark_delaunay", intermediate_frames: 8, fps: 30 },
+    };
+    setConfig({ ...config, ...settings[profile] });
+  }
+
+  function applyOutput(profile: OutputProfile) {
+    const settings: Record<OutputProfile, Pick<RenderConfig, "resolution" | "aspect_ratio" | "crf">> = {
+      phone: { resolution: "1080_vertical", aspect_ratio: "9:16", crf: 20 },
+      square: { resolution: "1080_square", aspect_ratio: "square", crf: 20 },
+      archive: { resolution: "original", aspect_ratio: "original", crf: 18 },
+    };
+    setConfig({ ...config, ...settings[profile] });
+  }
+
   return (
     <PageFrame size="wide" className="grid gap-4 space-y-0 xl:grid-cols-[minmax(0,1fr)_24rem]">
       <Panel>
@@ -176,20 +194,20 @@ export function Render({ project }: { project: Project }) {
           <div className="mt-4 grid gap-2 md:grid-cols-3">
             <PresetButton
               active={config.resolution === "1080_vertical" && config.aspect_ratio === "9:16" && config.morph_mode !== "none"}
-              title="Fast 1080p"
-              body="Recommended. Smooth vertical MP4 without full-resolution morph cost."
+              title="Everyday video"
+              body="Best starting point: phone-shaped, smooth, and reasonably quick."
               onClick={() => applyPreset("fast")}
             />
             <PresetButton
               active={config.resolution === "original" && config.aspect_ratio === "original"}
-              title="Full quality"
-              body="Original-size output. Use when you are okay waiting much longer."
+              title="Archive quality"
+              body="Keeps the original shape and detail. Use when waiting longer is fine."
               onClick={() => applyPreset("full")}
             />
             <PresetButton
               active={config.morph_mode === "none"}
-              title="Quick test"
-              body="No morphing. Useful for checking dates and framing first."
+              title="Quick proof"
+              body="A fast slideshow pass for checking dates, framing, and selected photos."
               onClick={() => applyPreset("test")}
             />
           </div>
@@ -248,27 +266,89 @@ export function Render({ project }: { project: Project }) {
           onClick={() => setShowSettings((value) => !value)}
         >
           <ChevronDown className={cn("h-4 w-4 transition-transform", showSettings && "rotate-180")} />
-          Video options
+          Customize video
           <SlidersHorizontal className="h-4 w-4" />
         </button>
 
         {showSettings ? (
           <div className="mt-3 rounded-lg border border-ink/10 bg-white p-4">
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              <Field label="Face lock style" help="Natural keeps your face steady without reshaping it. Stronger lock is more rigid.">
+            <div className="grid gap-4 xl:grid-cols-2">
+              <ChoiceGroup
+                title="How should it move?"
+                helper="This controls the feel of the transitions between photos."
+                choices={[
+                  {
+                    title: "Quick cuts",
+                    body: "A clean slideshow. Fastest, best for a proof video.",
+                    active: currentMotionProfile(config) === "still",
+                    icon: <TimerReset className="h-4 w-4" />,
+                    onClick: () => applyMotion("still"),
+                  },
+                  {
+                    title: "Natural morph",
+                    body: "Recommended. Faces glide without making the render painfully slow.",
+                    active: currentMotionProfile(config) === "natural",
+                    icon: <Sparkles className="h-4 w-4" />,
+                    onClick: () => applyMotion("natural"),
+                  },
+                  {
+                    title: "Extra smooth",
+                    body: "More in-between frames. Softer motion, longer render.",
+                    active: currentMotionProfile(config) === "extra",
+                    icon: <Film className="h-4 w-4" />,
+                    onClick: () => applyMotion("extra"),
+                  },
+                ]}
+              />
+              <ChoiceGroup
+                title="Where will you watch it?"
+                helper="This sets both size and shape so you do not have to pair two technical menus."
+                choices={[
+                  {
+                    title: "Phone story",
+                    body: "Vertical 1080p. Best for phones and sharing.",
+                    active: currentOutputProfile(config) === "phone",
+                    icon: <MonitorSmartphone className="h-4 w-4" />,
+                    onClick: () => applyOutput("phone"),
+                  },
+                  {
+                    title: "Square post",
+                    body: "1080p square. Easy to preview on any screen.",
+                    active: currentOutputProfile(config) === "square",
+                    icon: <Clapperboard className="h-4 w-4" />,
+                    onClick: () => applyOutput("square"),
+                  },
+                  {
+                    title: "Keep original",
+                    body: "Full source size and shape. Largest file, slowest render.",
+                    active: currentOutputProfile(config) === "archive",
+                    icon: <Film className="h-4 w-4" />,
+                    onClick: () => applyOutput("archive"),
+                  },
+                ]}
+              />
+            </div>
+
+            <div className="mt-5 rounded-md border border-ink/10 bg-paper p-3">
+              <div className="text-sm font-black text-ink">Fine tuning</div>
+              <p className="mt-1 text-xs font-semibold leading-5 text-ink/50">
+                These are here for unusual exports. The choices above are enough for most videos.
+              </p>
+              <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                <Field label="Face lock style" help="Natural keeps your face steady without reshaping it. Stronger lock is more rigid.">
                 <Select value={config.alignment_mode} onChange={(event) => setConfig({ ...config, alignment_mode: event.target.value as RenderConfig["alignment_mode"] })}>
                   <option value="similarity">Natural lock</option>
                   <option value="affine">Stronger lock</option>
                 </Select>
               </Field>
-              <Field label="Transition style" help="Smooth face movement creates in-between frames instead of a slideshow.">
+              <Field label="Transition engine" help="Face morph is the normal choice. GPU smoother is experimental and needs compatible hardware.">
                 <Select value={config.morph_mode} onChange={(event) => setConfig({ ...config, morph_mode: event.target.value as RenderConfig["morph_mode"] })}>
-                  <option value="landmark_delaunay">Smooth face movement</option>
+                  <option value="landmark_delaunay">Face morph</option>
                   <option value="rife">GPU smoother</option>
                   <option value="none">No morph</option>
                 </Select>
               </Field>
-              <Field label="Smoothness" help="Higher smoothness looks softer, but takes longer to create.">
+              <Field label="In-between frames" help="More frames means gentler movement between photos and a longer render.">
                 <Select value={String(config.intermediate_frames)} onChange={(event) => setConfig({ ...config, intermediate_frames: Number(event.target.value) })}>
                   <option value="0">Preview cuts only</option>
                   <option value="2">Subtle movement</option>
@@ -338,6 +418,7 @@ export function Render({ project }: { project: Project }) {
               <Field label="Audio path" help="Optional song or audio file to attach.">
                 <Input value={config.audio_path ?? ""} placeholder="Optional local audio file" onChange={(event) => setConfig({ ...config, audio_path: event.target.value || null })} />
               </Field>
+              </div>
             </div>
             <div className="mt-5 flex flex-wrap items-center gap-3">
               <label className="flex min-h-11 items-center gap-2 rounded-md bg-paper px-3 text-sm font-bold shadow-line">
@@ -432,6 +513,44 @@ function Summary({ label, value }: { label: string; value: string }) {
   );
 }
 
+type Choice = {
+  title: string;
+  body: string;
+  active: boolean;
+  icon: React.ReactNode;
+  onClick: () => void;
+};
+
+function ChoiceGroup({ title, helper, choices }: { title: string; helper: string; choices: Choice[] }) {
+  return (
+    <div>
+      <div className="text-sm font-black text-ink">{title}</div>
+      <p className="mt-1 text-xs font-semibold leading-5 text-ink/50">{helper}</p>
+      <div className="mt-3 grid gap-2">
+        {choices.map((choice) => (
+          <button
+            key={choice.title}
+            type="button"
+            onClick={choice.onClick}
+            className={cn(
+              "flex min-h-20 items-start gap-3 rounded-md border p-3 text-left transition",
+              choice.active ? "border-teal bg-teal/10 shadow-line" : "border-ink/10 bg-paper hover:border-teal/40 hover:bg-white",
+            )}
+          >
+            <span className={cn("mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-md", choice.active ? "bg-teal text-paper" : "bg-white text-ink/55")}>
+              {choice.active ? <Check className="h-4 w-4" /> : choice.icon}
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-black text-ink">{choice.title}</span>
+              <span className="mt-1 block text-xs font-semibold leading-5 text-ink/55">{choice.body}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function videoSizeLabel(value: RenderConfig["resolution"]) {
   const labels = {
     original: "Full quality",
@@ -448,6 +567,21 @@ function motionLabel(config: RenderConfig) {
   if (config.intermediate_frames <= 4) return "Smooth";
   if (config.intermediate_frames <= 8) return "Silky";
   return "Ultra smooth";
+}
+
+type MotionProfile = "still" | "natural" | "extra";
+type OutputProfile = "phone" | "square" | "archive";
+
+function currentMotionProfile(config: RenderConfig): MotionProfile {
+  if (config.morph_mode === "none" || config.intermediate_frames === 0) return "still";
+  if (config.intermediate_frames >= 8) return "extra";
+  return "natural";
+}
+
+function currentOutputProfile(config: RenderConfig): OutputProfile {
+  if (config.resolution === "original" && config.aspect_ratio === "original") return "archive";
+  if (config.aspect_ratio === "square" || config.resolution === "1080_square") return "square";
+  return "phone";
 }
 
 type RenderStats = {
