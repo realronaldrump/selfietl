@@ -46,7 +46,7 @@ const navItems: Array<{ key: PageKey; label: string; icon: typeof FolderOpen; se
   { key: "setup", label: "Setup", icon: FolderOpen, section: "admin" },
   { key: "grid", label: "Photos", icon: Images, section: "admin" },
   { key: "outliers", label: "Review", icon: ScanFace, section: "admin" },
-  { key: "stats", label: "Details", icon: BarChart3, section: "admin" },
+  { key: "stats", label: "Stats", icon: BarChart3, section: "admin" },
   { key: "render", label: "Custom render", icon: SlidersHorizontal, section: "admin" },
   { key: "history", label: "History", icon: Clock3, section: "admin" },
 ];

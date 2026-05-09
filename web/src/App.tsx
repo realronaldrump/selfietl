@@ -117,7 +117,7 @@ function RenderBridge({ onBack }: { onBack: () => void }) {
   return <ProjectScopedPage title="Custom render" onBack={onBack}>{(project) => <Render project={project} />}</ProjectScopedPage>;
 }
 function StatsBridge({ onBack }: { onBack: () => void }) {
-  return <ProjectScopedPage title="Details" onBack={onBack}>{(project) => <Stats project={project} />}</ProjectScopedPage>;
+  return <ProjectScopedPage title="Stats" onBack={onBack}>{(project) => <Stats project={project} />}</ProjectScopedPage>;
 }
 function HistoryBridge({ onBack }: { onBack: () => void }) {
   return <ProjectScopedPage title="History" onBack={onBack}>{(project) => <History project={project} />}</ProjectScopedPage>;

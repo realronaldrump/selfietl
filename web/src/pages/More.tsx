@@ -48,8 +48,8 @@ export function More({ onNavigate, onSwitchToDesktop }: { onNavigate: (target: M
         />
         <MoreLink
           icon={<BarChart3 className="h-5 w-5" />}
-          label="Details"
-          description="Quality, pose, and pipeline stats."
+          label="Stats"
+          description="Capture cadence, quality, and pose over time."
           onClick={() => onNavigate("stats")}
         />
         <MoreLink
