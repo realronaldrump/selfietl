@@ -1,6 +1,7 @@
 import pytest
 
-from selfietl.pipeline.compose import _filter_rows_by_date, _latest_row_per_day
+from selfietl.config import RenderConfig
+from selfietl.pipeline.compose import _filter_rows_by_date, _latest_row_per_day, _run_ffmpeg
 
 
 def test_filter_rows_by_date_keeps_full_end_day():
@@ -30,3 +31,24 @@ def test_latest_row_per_day_keeps_latest_capture_for_each_date():
     filtered = _latest_row_per_day(rows)
 
     assert [row["hash"] for row in filtered] == ["new", "next"]
+
+
+def test_run_ffmpeg_does_not_pipe_child_output(tmp_path, monkeypatch):
+    calls = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+    def fake_popen(command, **kwargs):
+        calls["command"] = command
+        calls["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr("selfietl.pipeline.compose.subprocess.Popen", fake_popen)
+
+    _run_ffmpeg(tmp_path, tmp_path / "out.mp4", RenderConfig(), frame_count=1)
+
+    assert calls["kwargs"]["stdout"] is calls["kwargs"]["stderr"]

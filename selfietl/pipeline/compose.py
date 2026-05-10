@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import tempfile
 import time
 from datetime import datetime, time as datetime_time
 from pathlib import Path
@@ -376,28 +377,30 @@ def _run_ffmpeg(
     if render_config.audio_path:
         command.extend(["-shortest", "-c:a", "aac", "-b:a", "192k"])
     command.extend(["-movflags", "+faststart", str(output_path)])
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    try:
-        while process.poll() is None:
-            if cancel_check:
-                try:
-                    cancel_check()
-                except Exception:
-                    process.terminate()
+    with tempfile.TemporaryFile() as ffmpeg_log:
+        process = subprocess.Popen(command, stdout=ffmpeg_log, stderr=ffmpeg_log)
+        try:
+            while process.poll() is None:
+                if cancel_check:
                     try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=5)
-                    raise
-            time.sleep(0.25)
-        stdout, stderr = process.communicate()
-    except Exception:
-        if process.poll() is None:
-            process.kill()
-        raise
-    if process.returncode != 0:
-        raise subprocess.CalledProcessError(process.returncode, command, output=stdout, stderr=stderr)
+                        cancel_check()
+                    except Exception:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=5)
+                        raise
+                time.sleep(0.25)
+        except Exception:
+            if process.poll() is None:
+                process.kill()
+            raise
+        if process.returncode != 0:
+            ffmpeg_log.seek(0)
+            stderr = ffmpeg_log.read()
+            raise subprocess.CalledProcessError(process.returncode, command, stderr=stderr)
 
 
 def _crop_aspect(image: Image.Image, aspect_ratio: str) -> Image.Image:
