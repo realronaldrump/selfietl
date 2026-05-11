@@ -248,6 +248,10 @@ export function renderFileUrl(renderId: number): string {
   return apiUrl(`/renders/${renderId}/file`);
 }
 
+export function renderPosterUrl(renderId: number): string {
+  return apiUrl(`/renders/${renderId}/poster.jpg`);
+}
+
 export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(apiUrl(url), {
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },

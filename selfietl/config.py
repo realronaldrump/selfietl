@@ -65,8 +65,8 @@ class RenderConfig(BaseModel):
     date_overlay: DateOverlayConfig = Field(default_factory=DateOverlayConfig)
     audio_path: str | None = None
     music_sync: bool = False
-    fade_in_seconds: float = Field(default=0.5, ge=0, le=30)
-    fade_out_seconds: float = Field(default=0.5, ge=0, le=30)
+    fade_in_seconds: float = Field(default=0, ge=0, le=30)
+    fade_out_seconds: float = Field(default=0, ge=0, le=30)
     codec: Literal["h264", "h265"] = "h264"
     crf: int = Field(default=18, ge=0, le=51)
     output_path: str | None = None

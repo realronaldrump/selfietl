@@ -24,8 +24,6 @@ DEFAULT_RENDER_CONFIG = {
     "resolution": "1080_vertical",
     "aspect_ratio": "9:16",
     "color_normalize": False,
-    "fade_in_seconds": 0.4,
-    "fade_out_seconds": 0.4,
     "codec": "h264",
     "crf": 20,
     "date_overlay": {

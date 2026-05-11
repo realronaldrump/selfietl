@@ -52,3 +52,28 @@ def test_run_ffmpeg_does_not_pipe_child_output(tmp_path, monkeypatch):
     _run_ffmpeg(tmp_path, tmp_path / "out.mp4", RenderConfig(), frame_count=1)
 
     assert calls["kwargs"]["stdout"] is calls["kwargs"]["stderr"]
+
+
+def test_run_ffmpeg_never_adds_fade_filters(tmp_path, monkeypatch):
+    calls = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+    def fake_popen(command, **kwargs):
+        calls["command"] = command
+        return FakeProcess()
+
+    monkeypatch.setattr("selfietl.pipeline.compose.subprocess.Popen", fake_popen)
+
+    _run_ffmpeg(
+        tmp_path,
+        tmp_path / "out.mp4",
+        RenderConfig(fade_in_seconds=5, fade_out_seconds=5),
+        frame_count=120,
+    )
+
+    assert "fade=t=" not in " ".join(calls["command"])

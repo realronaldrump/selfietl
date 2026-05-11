@@ -11,7 +11,7 @@ import {
   RefreshCw,
   Sparkles,
 } from "lucide-react";
-import { api, apiUrl, type TodayResponse } from "@/api/client";
+import { api, apiUrl, renderPosterUrl, type TodayResponse } from "@/api/client";
 import { Badge, Button, PageFrame, Panel, cn } from "@/components/ui";
 
 export type TodayPageAction = "capture" | "video" | "timeline" | "settings" | "review";
@@ -144,6 +144,7 @@ export function Today({ onAction }: { onAction: (action: TodayPageAction) => voi
               <video
                 className="aspect-[9/16] w-full bg-ink"
                 src={apiUrl(today.latest_render.video_url)}
+                poster={renderPosterUrl(today.latest_render.id)}
                 controls
                 playsInline
                 preload="metadata"

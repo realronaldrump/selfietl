@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, Clapperboard, Eye, Film, MonitorSmartphone, Play, SlidersHorizontal, Sparkles, TimerReset, XCircle } from "lucide-react";
-import { api, renderFileUrl, type JobStatus, type Project, type RenderConfig } from "@/api/client";
+import { api, renderFileUrl, renderPosterUrl, type JobStatus, type Project, type RenderConfig } from "@/api/client";
 import { JobStatus as JobStatusPanel } from "@/components/JobStatus";
 import { Button, Input, Label, PageFrame, Panel, Select, cn } from "@/components/ui";
 import { useJobEvents } from "@/hooks/useJobEvents";
@@ -25,8 +25,8 @@ const defaultConfig: RenderConfig = {
   },
   audio_path: null,
   music_sync: false,
-  fade_in_seconds: 0.5,
-  fade_out_seconds: 0.5,
+  fade_in_seconds: 0,
+  fade_out_seconds: 0,
   codec: "h264",
   crf: 18,
   output_path: null,
@@ -450,7 +450,7 @@ export function Render({ project }: { project: Project }) {
         </div>
         {latestDone ? (
           <div className="mt-4">
-            <video className="aspect-video w-full rounded-md bg-ink" controls src={renderFileUrl(latestDone.id)} />
+            <video className="aspect-video w-full rounded-md bg-ink" controls poster={renderPosterUrl(latestDone.id)} src={renderFileUrl(latestDone.id)} />
             <div className="mt-3 break-all rounded-md bg-white p-3 font-mono text-xs text-ink/70 shadow-line">{latestDone.output_path}</div>
           </div>
         ) : (

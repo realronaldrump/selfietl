@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Clipboard, Film, Trash2, XCircle } from "lucide-react";
-import { api, renderFileUrl, type Project, type Render } from "@/api/client";
+import { api, renderFileUrl, renderPosterUrl, type Project, type Render } from "@/api/client";
 import { Badge, Button, PageFrame, Panel } from "@/components/ui";
 
 export function History({ project }: { project: Project }) {
@@ -91,7 +91,7 @@ function RenderRow({ projectId, render }: { projectId: number; render: Render })
     <Panel className="grid gap-4 lg:grid-cols-[12rem_1fr_auto] lg:items-center">
       <div className="overflow-hidden rounded-md bg-ink">
         {render.status === "done" ? (
-          <video className="aspect-video w-full" src={renderFileUrl(render.id)} controls />
+          <video className="aspect-video w-full" src={renderFileUrl(render.id)} poster={renderPosterUrl(render.id)} controls />
         ) : (
           <div className="flex aspect-video items-center justify-center">
             <Film className="h-8 w-8 text-paper/45" />

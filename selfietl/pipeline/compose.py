@@ -356,13 +356,7 @@ def _run_ffmpeg(
     cancel_check: CancelCheck | None = None,
 ) -> None:
     codec = "libx264" if render_config.codec == "h264" else "libx265"
-    duration = frame_count / render_config.fps
     filters = ["format=yuv420p"]
-    if render_config.fade_in_seconds > 0:
-        filters.append(f"fade=t=in:st=0:d={render_config.fade_in_seconds}")
-    if render_config.fade_out_seconds > 0 and duration > render_config.fade_out_seconds:
-        start = max(0, duration - render_config.fade_out_seconds)
-        filters.append(f"fade=t=out:st={start:.3f}:d={render_config.fade_out_seconds}")
     command = [
         "ffmpeg",
         "-y",

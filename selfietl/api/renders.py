@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -78,6 +79,20 @@ def delete_render_history(
 
 @router.api_route("/renders/{render_id}/file", methods=["GET", "HEAD"])
 def render_file(render_id: int, db: Database = Depends(get_db)):
+    path = _render_file_path(render_id, db)
+    return FileResponse(path, media_type="video/mp4", filename=path.name)
+
+
+@router.get("/renders/{render_id}/poster.jpg")
+def render_poster(render_id: int, db: Database = Depends(get_db), config: AppConfig = Depends(get_config)):
+    video_path = _render_file_path(render_id, db)
+    poster_path = config.render_cache_dir / f"render_{render_id}" / "poster.jpg"
+    if not poster_path.exists() or poster_path.stat().st_mtime < video_path.stat().st_mtime:
+        _write_render_poster(video_path, poster_path)
+    return FileResponse(poster_path, media_type="image/jpeg")
+
+
+def _render_file_path(render_id: int, db: Database) -> Path:
     row = db.fetchone("SELECT output_path, status FROM renders WHERE id = ?", (render_id,))
     if row is None:
         raise HTTPException(status_code=404, detail="Render not found")
@@ -86,7 +101,37 @@ def render_file(render_id: int, db: Database = Depends(get_db)):
     path = Path(row["output_path"])
     if not path.exists():
         raise HTTPException(status_code=404, detail="Render file missing")
-    return FileResponse(path, media_type="video/mp4", filename=path.name)
+    return path
+
+
+def _write_render_poster(video_path: Path, poster_path: Path) -> None:
+    poster_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = poster_path.with_suffix(".tmp.jpg")
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-ss",
+        "1",
+        "-i",
+        str(video_path),
+        "-frames:v",
+        "1",
+        "-vf",
+        "scale=720:-2",
+        str(tmp_path),
+    ]
+    try:
+        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        tmp_path.unlink(missing_ok=True)
+        detail = "Could not create video poster"
+        if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
+            detail = f"{detail}: {exc.stderr.decode(errors='replace').strip()}"
+        raise HTTPException(status_code=500, detail=detail) from exc
+    tmp_path.replace(poster_path)
 
 
 @router.delete("/renders/{render_id}")
