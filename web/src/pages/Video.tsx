@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Clock, Film, Pause, Play, Settings, XCircle } from "lucide-react";
-import { api, apiUrl, renderFileUrl, renderPosterUrl, type AutoRenderConfig, type JobStatus, type Render } from "@/api/client";
+import { api, renderFileUrl, renderPlaybackUrl, renderPosterUrl, type AutoRenderConfig, type JobStatus, type Render } from "@/api/client";
 import { Badge, Button, PageFrame, Panel, ProgressBar, cn } from "@/components/ui";
 import { useJobEvents } from "@/hooks/useJobEvents";
 
@@ -50,12 +50,12 @@ export function Video({ onSettings }: { onSettings: () => void }) {
       </header>
 
       <Panel className="overflow-hidden p-0">
-        <div className="bg-ink">
+        <div className="flex justify-center bg-ink">
           {latest?.video_url ? (
             <video
               key={latest.id}
-              className="aspect-[9/16] w-full bg-ink"
-              src={apiUrl(latest.video_url)}
+              className="block h-auto max-h-[78vh] max-w-full bg-ink"
+              src={renderPlaybackUrl(latest.id)}
               poster={renderPosterUrl(latest.id)}
               controls
               playsInline
@@ -161,7 +161,7 @@ function RenderRow({ render, highlight }: { render: Render; highlight: boolean }
     <div className={cn("grid gap-3 rounded-md border border-ink/10 bg-paper p-3 sm:grid-cols-[6rem_1fr_auto]", highlight && "border-teal/40")}>
       <div className="overflow-hidden rounded bg-ink">
         {render.status === "done" ? (
-          <video className="aspect-[9/16] w-full" preload="metadata" src={renderFileUrl(render.id)} poster={renderPosterUrl(render.id)} muted playsInline />
+          <img className="aspect-[9/16] w-full object-cover" src={renderPosterUrl(render.id)} alt="" loading="lazy" />
         ) : (
           <div className="grid aspect-[9/16] place-items-center text-paper/45">
             {render.status === "running" ? <Pause className="h-6 w-6" /> : <Film className="h-6 w-6" />}

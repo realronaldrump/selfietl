@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import tempfile
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -83,13 +85,22 @@ def render_file(render_id: int, db: Database = Depends(get_db)):
     return FileResponse(path, media_type="video/mp4", filename=path.name)
 
 
-@router.get("/renders/{render_id}/poster.jpg")
+@router.api_route("/renders/{render_id}/poster.jpg", methods=["GET", "HEAD"])
 def render_poster(render_id: int, db: Database = Depends(get_db), config: AppConfig = Depends(get_config)):
     video_path = _render_file_path(render_id, db)
     poster_path = config.render_cache_dir / f"render_{render_id}" / "poster.jpg"
     if not poster_path.exists() or poster_path.stat().st_mtime < video_path.stat().st_mtime:
         _write_render_poster(video_path, poster_path)
     return FileResponse(poster_path, media_type="image/jpeg")
+
+
+@router.api_route("/renders/{render_id}/playback.mp4", methods=["GET", "HEAD"])
+def render_playback(render_id: int, db: Database = Depends(get_db), config: AppConfig = Depends(get_config)):
+    video_path = _render_file_path(render_id, db)
+    playback_path = config.render_cache_dir / f"render_{render_id}" / "playback.mp4"
+    if not playback_path.exists() or playback_path.stat().st_mtime < video_path.stat().st_mtime:
+        _write_render_playback(video_path, playback_path)
+    return FileResponse(playback_path, media_type="video/mp4")
 
 
 def _render_file_path(render_id: int, db: Database) -> Path:
@@ -106,7 +117,7 @@ def _render_file_path(render_id: int, db: Database) -> Path:
 
 def _write_render_poster(video_path: Path, poster_path: Path) -> None:
     poster_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = poster_path.with_suffix(".tmp.jpg")
+    tmp_path = poster_path.with_name(f"{poster_path.stem}.{uuid.uuid4().hex}.tmp{poster_path.suffix}")
     command = [
         "ffmpeg",
         "-hide_banner",
@@ -131,7 +142,56 @@ def _write_render_poster(video_path: Path, poster_path: Path) -> None:
         if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
             detail = f"{detail}: {exc.stderr.decode(errors='replace').strip()}"
         raise HTTPException(status_code=500, detail=detail) from exc
+    if not tmp_path.exists():
+        raise HTTPException(status_code=500, detail="Could not create video poster")
     tmp_path.replace(poster_path)
+
+
+def _write_render_playback(video_path: Path, playback_path: Path) -> None:
+    playback_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = playback_path.with_name(f"{playback_path.stem}.{uuid.uuid4().hex}.tmp{playback_path.suffix}")
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(video_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-vf",
+        "scale=720:-2,format=yuv420p",
+        "-c:v",
+        "libx264",
+        "-profile:v",
+        "main",
+        "-level",
+        "4.0",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "24",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-movflags",
+        "+faststart",
+        str(tmp_path),
+    ]
+    with tempfile.TemporaryFile() as ffmpeg_log:
+        completed = subprocess.run(command, stdout=ffmpeg_log, stderr=ffmpeg_log)
+        if completed.returncode != 0:
+            ffmpeg_log.seek(0)
+            detail = ffmpeg_log.read().decode(errors="replace").strip()
+            tmp_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail=f"Could not create browser playback video: {detail}") from None
+    if not tmp_path.exists():
+        raise HTTPException(status_code=500, detail="Could not create browser playback video")
+    tmp_path.replace(playback_path)
 
 
 @router.delete("/renders/{render_id}")

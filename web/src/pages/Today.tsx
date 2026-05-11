@@ -11,7 +11,7 @@ import {
   RefreshCw,
   Sparkles,
 } from "lucide-react";
-import { api, apiUrl, renderPosterUrl, type TodayResponse } from "@/api/client";
+import { api, apiUrl, renderPlaybackUrl, renderPosterUrl, type TodayResponse } from "@/api/client";
 import { Badge, Button, PageFrame, Panel, cn } from "@/components/ui";
 
 export type TodayPageAction = "capture" | "video" | "timeline" | "settings" | "review";
@@ -140,10 +140,10 @@ export function Today({ onAction }: { onAction: (action: TodayPageAction) => voi
         </div>
         <div className="px-4 py-4">
           {today?.latest_render?.video_url ? (
-            <div className="overflow-hidden rounded-md bg-ink">
+            <div className="flex justify-center overflow-hidden rounded-md bg-ink">
               <video
-                className="aspect-[9/16] w-full bg-ink"
-                src={apiUrl(today.latest_render.video_url)}
+                className="block h-auto max-h-[78vh] max-w-full bg-ink"
+                src={renderPlaybackUrl(today.latest_render.id)}
                 poster={renderPosterUrl(today.latest_render.id)}
                 controls
                 playsInline

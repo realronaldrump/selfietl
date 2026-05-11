@@ -248,6 +248,10 @@ export function renderFileUrl(renderId: number): string {
   return apiUrl(`/renders/${renderId}/file`);
 }
 
+export function renderPlaybackUrl(renderId: number): string {
+  return apiUrl(`/renders/${renderId}/playback.mp4`);
+}
+
 export function renderPosterUrl(renderId: number): string {
   return apiUrl(`/renders/${renderId}/poster.jpg`);
 }
