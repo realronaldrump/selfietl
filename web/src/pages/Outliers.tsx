@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Eye, Gauge, RotateCcw, ShieldAlert, XCircle } from "lucide-react";
-import { api, type Photo, type Project } from "@/api/client";
+import { api, apiUrl, type Photo, type Project } from "@/api/client";
 import { Badge, Button, PageFrame, Panel, cn } from "@/components/ui";
 
 const QUALITY_THRESHOLD = 0.6;
@@ -150,7 +150,7 @@ function ReviewDiagram({ photo, explanation }: { photo: Photo; explanation: Revi
 
   return (
     <div className="relative aspect-[4/5] overflow-hidden rounded-md bg-ink shadow-line">
-      <img src={photo.thumb_url} alt="" className="h-full w-full object-cover" loading="lazy" />
+      <img src={apiUrl(photo.thumb_url)} alt="" className="h-full w-full object-cover" loading="lazy" />
       <div className="absolute inset-0 bg-gradient-to-t from-ink/70 via-ink/5 to-transparent" />
       <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
         <defs>

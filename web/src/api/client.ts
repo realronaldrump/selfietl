@@ -230,8 +230,26 @@ export type AutoRenderUpdate = {
   render_config?: Record<string, unknown>;
 };
 
+const SELFIE_TL_BASE_PATH = "/selfietl";
+
+function apiBasePath(): string {
+  if (typeof window === "undefined") return "/api";
+  const path = window.location.pathname;
+  return path === SELFIE_TL_BASE_PATH || path.startsWith(`${SELFIE_TL_BASE_PATH}/`) ? `${SELFIE_TL_BASE_PATH}/api` : "/api";
+}
+
+export function apiUrl(path: string): string {
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  const withoutApiPrefix = normalized === "/api" ? "" : normalized.startsWith("/api/") ? normalized.slice(4) : normalized;
+  return `${apiBasePath()}${withoutApiPrefix}`;
+}
+
+export function renderFileUrl(renderId: number): string {
+  return apiUrl(`/renders/${renderId}/file`);
+}
+
 export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
+  const response = await fetch(apiUrl(url), {
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
     ...init,
   });
@@ -299,7 +317,7 @@ export const api = {
   previewCapture: (files: File[]) => {
     const form = new FormData();
     files.forEach((file) => form.append("files", file, file.name));
-    return fetch("/api/capture/preview", { method: "POST", body: form }).then(async (response) => {
+    return fetch(apiUrl("/capture/preview"), { method: "POST", body: form }).then(async (response) => {
       if (!response.ok) {
         let message = `${response.status} ${response.statusText}`;
         try {
@@ -318,7 +336,7 @@ export const api = {
     const filename = file instanceof File ? file.name : "selfie.jpg";
     form.append("file", file, filename);
     const query = capturedAt ? `?captured_at=${encodeURIComponent(capturedAt)}` : "";
-    return fetch(`/api/capture${query}`, { method: "POST", body: form }).then(async (response) => {
+    return fetch(apiUrl(`/capture${query}`), { method: "POST", body: form }).then(async (response) => {
       if (!response.ok) {
         let message = `${response.status} ${response.statusText}`;
         try {
@@ -337,7 +355,7 @@ export const api = {
     const metadata = items.map((item) => ({ captured_at: item.capturedAt ?? null }));
     items.forEach((item) => form.append("files", item.file, item.file.name));
     form.append("metadata", JSON.stringify(metadata));
-    return fetch("/api/capture/batch", { method: "POST", body: form }).then(async (response) => {
+    return fetch(apiUrl("/capture/batch"), { method: "POST", body: form }).then(async (response) => {
       if (!response.ok) {
         let message = `${response.status} ${response.statusText}`;
         try {

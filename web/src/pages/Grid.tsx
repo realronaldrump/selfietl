@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, SkipBack, SkipForward } from "lucide-react";
-import { api, fetchJson, type Photo, type Project } from "@/api/client";
+import { api, apiUrl, fetchJson, type Photo, type Project } from "@/api/client";
 import { Badge, Button, PageFrame, Panel, ProgressBar, cn } from "@/components/ui";
 
 type GridMode = "all" | "included";
@@ -88,7 +88,7 @@ function PhotoTile({ photo, onOpen, onToggle }: { photo: Photo; onOpen: () => vo
   return (
     <div className={cn("overflow-hidden rounded-lg bg-paper shadow-line", photo.skipped && "opacity-55")}>
       <button className="group relative block aspect-square w-full bg-ink/8" onClick={onOpen}>
-        <img src={photo.thumb_url} alt="" className="h-full w-full object-cover" loading="lazy" />
+        <img src={apiUrl(photo.thumb_url)} alt="" className="h-full w-full object-cover" loading="lazy" />
         <div className="absolute inset-0 hidden items-center justify-center bg-ink/45 group-hover:flex">
           <Eye className="h-8 w-8 text-paper" />
         </div>
@@ -130,7 +130,7 @@ function PhotoModal({ photo, onClose }: { photo: Photo; onClose: () => void }) {
         </div>
         <div className="grid max-h-[78vh] gap-4 overflow-auto p-4 lg:grid-cols-[1fr_18rem]">
           <div className="relative mx-auto max-h-[72vh] overflow-hidden rounded-md bg-ink">
-            <img src={photo.image_url} alt="" className="max-h-[72vh] w-full object-contain" />
+            <img src={apiUrl(photo.image_url)} alt="" className="max-h-[72vh] w-full object-contain" />
             {landmarksQuery.data ? (
               <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
                 {landmarksQuery.data.points.map((point, index) => (

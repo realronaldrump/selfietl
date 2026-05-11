@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Clock, Film, Pause, Play, Settings, XCircle } from "lucide-react";
-import { api, type AutoRenderConfig, type JobStatus, type Render } from "@/api/client";
+import { api, apiUrl, renderFileUrl, type AutoRenderConfig, type JobStatus, type Render } from "@/api/client";
 import { Badge, Button, PageFrame, Panel, ProgressBar, cn } from "@/components/ui";
 import { useJobEvents } from "@/hooks/useJobEvents";
 
@@ -55,7 +55,7 @@ export function Video({ onSettings }: { onSettings: () => void }) {
             <video
               key={latest.id}
               className="aspect-[9/16] w-full bg-ink"
-              src={latest.video_url}
+              src={apiUrl(latest.video_url)}
               controls
               playsInline
               preload="metadata"
@@ -160,7 +160,7 @@ function RenderRow({ render, highlight }: { render: Render; highlight: boolean }
     <div className={cn("grid gap-3 rounded-md border border-ink/10 bg-paper p-3 sm:grid-cols-[6rem_1fr_auto]", highlight && "border-teal/40")}>
       <div className="overflow-hidden rounded bg-ink">
         {render.status === "done" ? (
-          <video className="aspect-[9/16] w-full" preload="metadata" src={`/api/renders/${render.id}/file`} muted playsInline />
+          <video className="aspect-[9/16] w-full" preload="metadata" src={renderFileUrl(render.id)} muted playsInline />
         ) : (
           <div className="grid aspect-[9/16] place-items-center text-paper/45">
             {render.status === "running" ? <Pause className="h-6 w-6" /> : <Film className="h-6 w-6" />}
@@ -179,7 +179,7 @@ function RenderRow({ render, highlight }: { render: Render; highlight: boolean }
       </div>
       {render.status === "done" ? (
         <a
-          href={`/api/renders/${render.id}/file`}
+          href={renderFileUrl(render.id)}
           className="self-start rounded-md border border-ink/10 px-3 py-2 text-xs font-black text-ink/65 hover:border-teal/30"
           target="_blank"
           rel="noreferrer"

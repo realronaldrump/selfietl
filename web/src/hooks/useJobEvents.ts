@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type JobStatus } from "@/api/client";
+import { api, apiUrl, type JobStatus } from "@/api/client";
 
 export function useJobEvents(jobId: string | null, onTerminal?: (job: JobStatus) => void) {
   const [job, setJob] = useState<JobStatus | null>(null);
@@ -22,7 +22,7 @@ export function useJobEvents(jobId: string | null, onTerminal?: (job: JobStatus)
       }
     }
 
-    const source = new EventSource(`/api/jobs/${jobId}/events`);
+    const source = new EventSource(apiUrl(`/jobs/${jobId}/events`));
     source.onmessage = (event) => {
       const payload = JSON.parse(event.data) as JobStatus;
       update(payload);

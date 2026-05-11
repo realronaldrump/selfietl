@@ -16,7 +16,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api, type Project } from "@/api/client";
+import { api, apiUrl, type Project } from "@/api/client";
 import { Badge, Metric, PageFrame, Panel, cn } from "@/components/ui";
 
 type StatsPayload = {
@@ -241,7 +241,7 @@ export function Stats({ project }: { project: Project }) {
             </div>
             <Badge tone="good">anchor</Badge>
           </div>
-          <img className="mt-3 aspect-video w-full rounded-md bg-ink object-contain" src={`/api/projects/${project.id}/avg-face`} alt="" />
+          <img className="mt-3 aspect-video w-full rounded-md bg-ink object-contain" src={apiUrl(`/projects/${project.id}/avg-face`)} alt="" />
         </Panel>
         <Panel>
           <div className="flex items-center justify-between gap-3">
@@ -251,7 +251,7 @@ export function Stats({ project }: { project: Project }) {
             </div>
             <Badge>drift</Badge>
           </div>
-          <img className="mt-3 aspect-video w-full rounded-md bg-ink object-contain" src={`/api/projects/${project.id}/heatmap`} alt="" />
+          <img className="mt-3 aspect-video w-full rounded-md bg-ink object-contain" src={apiUrl(`/projects/${project.id}/heatmap`)} alt="" />
         </Panel>
       </div>
     </PageFrame>

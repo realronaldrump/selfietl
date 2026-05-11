@@ -11,7 +11,7 @@ import {
   RefreshCw,
   Sparkles,
 } from "lucide-react";
-import { api, type TodayResponse } from "@/api/client";
+import { api, apiUrl, type TodayResponse } from "@/api/client";
 import { Badge, Button, PageFrame, Panel, cn } from "@/components/ui";
 
 export type TodayPageAction = "capture" | "video" | "timeline" | "settings" | "review";
@@ -50,13 +50,14 @@ export function Today({ onAction }: { onAction: (action: TodayPageAction) => voi
         <div className={cn("relative aspect-square w-full", hasToday ? "bg-ink" : "bg-paper")}>
           {photo ? (
             <img
-              src={photo.aligned_url || photo.image_url}
+              src={apiUrl(photo.aligned_url || photo.image_url)}
               alt="Today's selfie"
               className="h-full w-full object-cover"
               onError={(event) => {
                 const target = event.currentTarget;
-                if (photo.image_url && target.src !== photo.image_url) {
-                  target.src = photo.image_url;
+                const fallback = apiUrl(photo.image_url);
+                if (photo.image_url && target.src !== fallback) {
+                  target.src = fallback;
                 }
               }}
             />
@@ -142,7 +143,7 @@ export function Today({ onAction }: { onAction: (action: TodayPageAction) => voi
             <div className="overflow-hidden rounded-md bg-ink">
               <video
                 className="aspect-[9/16] w-full bg-ink"
-                src={today.latest_render.video_url}
+                src={apiUrl(today.latest_render.video_url)}
                 controls
                 playsInline
                 preload="metadata"

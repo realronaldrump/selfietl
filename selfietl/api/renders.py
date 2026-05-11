@@ -76,7 +76,7 @@ def delete_render_history(
     return _delete_render_rows(rows, db, config, delete_files=delete_files, delete_cache=delete_cache)
 
 
-@router.get("/renders/{render_id}/file")
+@router.api_route("/renders/{render_id}/file", methods=["GET", "HEAD"])
 def render_file(render_id: int, db: Database = Depends(get_db)):
     row = db.fetchone("SELECT output_path, status FROM renders WHERE id = ?", (render_id,))
     if row is None:

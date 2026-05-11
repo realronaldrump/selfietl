@@ -77,3 +77,30 @@ def test_delete_done_render_requires_explicit_render_delete(tmp_path):
     assert response.json()["deleted_render_ids"] == [render_id]
     assert not output.exists()
     assert db.fetchone("SELECT id FROM renders WHERE id = ?", (render_id,)) is None
+
+
+def test_render_file_supports_head_requests(tmp_path):
+    config = load_config(tmp_path / "home")
+    db = Database(config.db_path)
+    project_id = db.execute(
+        "INSERT INTO projects (name, source_folder, created_at) VALUES (?, ?, ?)",
+        ("p", str(config.inbox_dir), "2026-05-09 10:00:00"),
+    )
+    output = config.exports_dir / "done.mp4"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(b"done-video")
+    render_id = db.execute(
+        """
+        INSERT INTO renders (project_id, output_path, started_at, finished_at, status)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (project_id, str(output), "2026-05-09 11:00:00", "2026-05-09 11:01:00", "done"),
+    )
+
+    app = create_app(config)
+    with TestClient(app) as client:
+        response = client.head(f"/api/renders/{render_id}/file")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "video/mp4"
+    assert response.headers["content-length"] == str(output.stat().st_size)
