@@ -46,7 +46,8 @@ class ExportDefaults(BaseModel):
 
 class DateOverlayConfig(BaseModel):
     enabled: bool = True
-    format: str = "%b %Y"
+    # Kept for older saved configs/API payloads; the renderer uses a fixed full-date label.
+    format: str = "%B %-d, %Y"
     position: Literal["bottom-right", "bottom-left", "top-right", "top-left"] = "bottom-right"
     font_size_px: int = 48
     opacity: float = 0.85

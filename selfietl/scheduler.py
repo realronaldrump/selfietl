@@ -28,7 +28,7 @@ DEFAULT_RENDER_CONFIG = {
     "crf": 20,
     "date_overlay": {
         "enabled": True,
-        "format": "%b %Y",
+        "format": "%B %-d, %Y",
         "position": "bottom-right",
         "font_size_px": 48,
         "opacity": 0.85,

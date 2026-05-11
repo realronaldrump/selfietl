@@ -18,7 +18,7 @@ const defaultConfig: RenderConfig = {
   aspect_ratio: "9:16",
   date_overlay: {
     enabled: true,
-    format: "%b %Y",
+    format: "%B %-d, %Y",
     position: "bottom-right",
     font_size_px: 48,
     opacity: 0.85,
@@ -395,23 +395,6 @@ export function Render({ project }: { project: Project }) {
                   <option value="14">Very high quality</option>
                 </Select>
               </Field>
-              <Field label="Date label" help="Choose how the date appears on the video.">
-                <Select value={config.date_overlay.format} onChange={(event) => setConfig({ ...config, date_overlay: { ...config.date_overlay, format: event.target.value } })}>
-                  <option value="%b %Y">May 2026</option>
-                  <option value="%B %Y">May 2026, full month</option>
-                  <option value="%Y">2026 only</option>
-                  <option value="%b %d, %Y">May 05, 2026</option>
-                  <option value="%Y-%m-%d">2026-05-05</option>
-                </Select>
-              </Field>
-              <Field label="Overlay position" help="Where the date appears on the video.">
-                <Select value={config.date_overlay.position} onChange={(event) => setConfig({ ...config, date_overlay: { ...config.date_overlay, position: event.target.value as RenderConfig["date_overlay"]["position"] } })}>
-                  <option value="bottom-right">Bottom right</option>
-                  <option value="bottom-left">Bottom left</option>
-                  <option value="top-right">Top right</option>
-                  <option value="top-left">Top left</option>
-                </Select>
-              </Field>
               <Field label="Output path" help="Leave blank to save into ~/.selfietl/exports.">
                 <Input value={config.output_path ?? ""} placeholder="~/Movies/selfietl.mp4" onChange={(event) => setConfig({ ...config, output_path: event.target.value || null })} />
               </Field>
@@ -428,14 +411,6 @@ export function Render({ project }: { project: Project }) {
                   onChange={(event) => setConfig({ ...config, color_normalize: event.target.checked })}
                 />
                 Normalize color
-              </label>
-              <label className="flex min-h-11 items-center gap-2 rounded-md bg-paper px-3 text-sm font-bold shadow-line">
-                <input
-                  type="checkbox"
-                  checked={config.date_overlay.enabled}
-                  onChange={(event) => setConfig({ ...config, date_overlay: { ...config.date_overlay, enabled: event.target.checked } })}
-                />
-                Date overlay
               </label>
             </div>
           </div>

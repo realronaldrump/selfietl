@@ -167,7 +167,7 @@ def quick_preview(db: Database, config: AppConfig, project_id: int) -> Path:
         fps=10,
         resolution="original",
         aspect_ratio="original",
-        date_overlay={"enabled": True, "format": "%Y-%m-%d", "font_size_px": 28, "opacity": 0.8},
+        date_overlay={"enabled": True, "font_size_px": 28, "opacity": 0.8},
         fade_in_seconds=0,
         fade_out_seconds=0,
         crf=24,

@@ -7,14 +7,16 @@ from PIL import Image, ImageDraw, ImageFont
 from selfietl.config import DateOverlayConfig
 
 
+def format_overlay_date(captured_at: datetime) -> str:
+    return f"{captured_at:%B} {captured_at.day}, {captured_at:%Y}"
+
+
 def draw_date_overlay(image: Image.Image, captured_at: datetime, config: DateOverlayConfig) -> Image.Image:
-    if not config.enabled:
-        return image
     canvas = image.convert("RGBA")
     overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     font = _load_font(config.font_size_px)
-    text = captured_at.strftime(config.format)
+    text = format_overlay_date(captured_at)
     bbox = draw.textbbox((0, 0), text, font=font)
     text_w = bbox[2] - bbox[0]
     text_h = bbox[3] - bbox[1]
