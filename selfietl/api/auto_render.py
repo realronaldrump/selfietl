@@ -16,10 +16,12 @@ from selfietl.models import (
 )
 from selfietl.scheduler import (
     DEFAULT_RENDER_CONFIG,
+    auto_render_has_pending_changes,
     kick_off_auto_render,
     load_settings,
     next_run_at,
     parse_time,
+    project_has_active_photos,
     primary_project_id,
     save_settings,
 )
@@ -39,8 +41,15 @@ def _build_response(
 ) -> AutoRenderResponse:
     settings = load_settings(config)
     project_id = primary_project_id(db, config)
-    next_run = next_run_at(datetime.now(), settings.time, settings.last_run_date, settings.last_attempt_at)
+    next_run = next_run_at(
+        datetime.now(),
+        settings.time,
+        settings.last_run_date,
+        settings.last_attempt_at,
+        settings.last_checked_date,
+    )
     last_render: dict[str, Any] | None = None
+    has_pending_changes = False
     if settings.last_render_id:
         row = db.fetchone(
             "SELECT id, status, started_at, finished_at, output_path FROM renders WHERE id = ?",
@@ -55,17 +64,24 @@ def _build_response(
                 "output_path": row["output_path"],
                 "video_url": f"/api/renders/{int(row['id'])}/file" if row["status"] == "done" else None,
             }
+    if project_id is not None and project_has_active_photos(db, project_id):
+        try:
+            has_pending_changes = auto_render_has_pending_changes(db, config, project_id, settings)
+        except Exception:
+            has_pending_changes = True
     return AutoRenderResponse(
         enabled=settings.enabled,
         time=settings.time,
         next_run_at=next_run.isoformat(timespec="seconds"),
         last_run_date=settings.last_run_date,
+        last_checked_date=settings.last_checked_date,
         last_render_id=settings.last_render_id,
         last_attempt_at=settings.last_attempt_at,
         last_error=settings.last_error,
         last_render=last_render,
         render_config=settings.render_config,
         project_id=project_id,
+        has_pending_changes=has_pending_changes,
         scheduler_running=bool(_scheduler(request)),
     )
 

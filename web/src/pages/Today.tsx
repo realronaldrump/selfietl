@@ -170,11 +170,12 @@ export function Today({ onAction }: { onAction: (action: TodayPageAction) => voi
           <h2 className="text-sm font-black uppercase tracking-[0.12em] text-ink">Auto-render</h2>
         </div>
         <p className="mt-2 text-sm font-semibold text-ink/65">
-          {auto?.enabled ? `Runs every day at ${formatTimeLabel(auto.time)}.` : "Auto-render is paused."}
+          {auto?.enabled ? `Checks nightly at ${formatTimeLabel(auto.time)} and renders when inputs change.` : "Auto-render is paused."}
         </p>
         <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-ink/55">
           {auto?.enabled ? <Badge tone="good">on</Badge> : <Badge tone="warn">paused</Badge>}
           {nextRunLabel ? <Badge>Next: {nextRunLabel}</Badge> : null}
+          {auto?.has_pending_changes ? <Badge tone="warn">Changes queued</Badge> : null}
           {auto?.last_render?.status === "done" ? <Badge tone="good">Last build OK</Badge> : null}
         </div>
         <div className="mt-3 flex flex-wrap gap-2">

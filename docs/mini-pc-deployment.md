@@ -51,18 +51,20 @@ The daily auto-render is driven by `selfietl.scheduler.AutoRenderScheduler`, sta
   "enabled": true,
   "time": "03:00",
   "last_run_date": "2026-05-08",
+  "last_checked_date": "2026-05-09",
   "last_render_id": 42,
+  "last_render_signature": "a3f...",
   "render_config": { "resolution": "1080_vertical", "morph_mode": "landmark_delaunay" }
 }
 ```
 
-When the scheduler fires it:
+When the scheduler fires it first fingerprints the active photo set, the saved render config, and the alignment settings. If that fingerprint matches the last successful auto-render, the check is recorded and no duplicate MP4 is created. When inputs have changed, it:
 
 1. Recomputes the canonical face from all included frames.
 2. Re-aligns every active photo to the new canonical (`force=True`).
 3. Renders the timelapse with the saved render config.
 
-The scheduler records a day as complete only after the MP4 finishes successfully. If the mini PC was offline at the scheduled time, or a build fails, it will catch up after startup and retry later instead of silently skipping the day.
+The scheduler records a render as successful only after the MP4 finishes. It records unchanged-input checks separately so the nightly loop waits until the next day without implying a new video was produced. If the mini PC was offline at the scheduled time, or a build fails, it will catch up after startup and retry later instead of silently skipping changed inputs.
 
 Trigger an immediate render from the UI's *Render now* button or via:
 

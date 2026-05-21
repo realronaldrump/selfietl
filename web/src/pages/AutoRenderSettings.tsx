@@ -102,11 +102,11 @@ export function AutoRenderSettings({ onBack }: { onBack: () => void }) {
           <h1 className="text-xl font-black text-ink">Schedule</h1>
         </div>
         <p className="mt-1 text-sm font-semibold text-ink/65">
-          Pick a time when the mini PC is idle. The default 3 AM window works well for most days.
+          Pick a time when the mini PC is idle. The app checks nightly and renders only when photos or video settings changed.
         </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_8rem]">
           <label className="flex min-h-12 items-center justify-between gap-3 rounded-md border border-ink/10 bg-paper px-3 py-2 shadow-line">
-            <span className="text-sm font-black text-ink">Run every day</span>
+            <span className="text-sm font-black text-ink">Check nightly</span>
             <input
               type="checkbox"
               checked={draft.enabled}
@@ -126,7 +126,17 @@ export function AutoRenderSettings({ onBack }: { onBack: () => void }) {
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-semibold text-ink/55">
           <Clock className="h-4 w-4 text-teal" />
           {autoQuery.data ? <Badge>Next: {formatNextRun(autoQuery.data.next_run_at)}</Badge> : null}
-          {autoQuery.data?.last_run_date ? <Badge tone="good">Last: {autoQuery.data.last_run_date}</Badge> : null}
+          {autoQuery.data ? (
+            autoQuery.data.has_pending_changes ? (
+              <Badge tone="warn">Changes queued</Badge>
+            ) : (
+              <Badge tone="good">Up to date</Badge>
+            )
+          ) : null}
+          {autoQuery.data?.last_run_date ? <Badge tone="good">Last render: {autoQuery.data.last_run_date}</Badge> : null}
+          {autoQuery.data?.last_checked_date && autoQuery.data.last_checked_date !== autoQuery.data.last_run_date ? (
+            <Badge>Last check: {autoQuery.data.last_checked_date}</Badge>
+          ) : null}
           {autoQuery.data?.last_error ? <Badge tone="bad">Last failed</Badge> : null}
         </div>
         {autoQuery.data?.last_error ? (

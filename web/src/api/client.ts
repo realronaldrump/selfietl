@@ -215,12 +215,14 @@ export type AutoRenderConfig = {
   time: string;
   next_run_at: string;
   last_run_date: string | null;
+  last_checked_date: string | null;
   last_render_id: number | null;
   last_attempt_at: string | null;
   last_error: string | null;
   last_render: LatestRender | null;
   render_config: Record<string, unknown>;
   project_id: number | null;
+  has_pending_changes: boolean;
   scheduler_running: boolean;
 };
 

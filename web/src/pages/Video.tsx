@@ -131,10 +131,17 @@ function AutoSummary({ auto, onSettings }: { auto: AutoRenderConfig | undefined;
           <div className="flex items-center gap-2">
             {auto?.enabled ? <Badge tone="good">Auto-render on</Badge> : <Badge tone="warn">Paused</Badge>}
             {auto?.scheduler_running ? <Badge tone="good">Scheduler live</Badge> : null}
+            {auto ? (
+              auto.has_pending_changes ? (
+                <Badge tone="warn">Changes queued</Badge>
+              ) : (
+                <Badge tone="good">Up to date</Badge>
+              )
+            ) : null}
             {auto?.last_error ? <Badge tone="bad">Last failed</Badge> : null}
           </div>
           <div className="mt-1 text-sm font-semibold text-ink/65">
-            {auto?.enabled ? `Runs daily at ${formatTimeLabel(auto.time)}` : "Manual only until you turn it back on"}
+            {auto?.enabled ? `Checks nightly at ${formatTimeLabel(auto.time)}` : "Manual only until you turn it back on"}
           </div>
           {auto ? <div className="mt-1 text-xs font-semibold text-ink/45">Next: {formatNextRun(auto.next_run_at)}</div> : null}
           {auto?.last_error ? <div className="mt-1 max-w-md text-xs font-semibold text-coral">{auto.last_error}</div> : null}

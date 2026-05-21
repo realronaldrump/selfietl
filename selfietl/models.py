@@ -187,10 +187,12 @@ class AutoRenderResponse(BaseModel):
     time: str
     next_run_at: str
     last_run_date: str | None = None
+    last_checked_date: str | None = None
     last_render_id: int | None = None
     last_attempt_at: str | None = None
     last_error: str | None = None
     last_render: LatestRender | None = None
     render_config: dict[str, Any]
     project_id: int | None = None
+    has_pending_changes: bool = False
     scheduler_running: bool = False

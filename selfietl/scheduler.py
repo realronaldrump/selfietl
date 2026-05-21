@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,7 @@ from selfietl.db import Database
 from selfietl.jobs.runner import CancellationRequested, runner
 from selfietl.pipeline.align import align_project
 from selfietl.pipeline.canonical import compute_canonical_face
-from selfietl.pipeline.compose import create_render_row, mark_render_failed, render_project
+from selfietl.pipeline.compose import _active_rows, create_render_row, mark_render_failed, render_project
 
 DEFAULT_RENDER_TIME = "03:00"
 AUTO_RENDER_RETRY_DELAY = timedelta(minutes=60)
@@ -36,17 +37,20 @@ DEFAULT_RENDER_CONFIG = {
 }
 
 logger = logging.getLogger("selfietl.scheduler")
+SIGNATURE_VERSION = 1
 
 
 @dataclass
 class AutoRenderSettings:
     enabled: bool
     time: str
-    last_run_date: str | None
-    last_render_id: int | None
-    last_attempt_at: str | None
-    last_error: str | None
-    render_config: dict[str, Any]
+    last_run_date: str | None = None
+    last_render_id: int | None = None
+    last_attempt_at: str | None = None
+    last_error: str | None = None
+    render_config: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_RENDER_CONFIG))
+    last_checked_date: str | None = None
+    last_render_signature: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -57,6 +61,8 @@ class AutoRenderSettings:
             "last_attempt_at": self.last_attempt_at,
             "last_error": self.last_error,
             "render_config": self.render_config,
+            "last_checked_date": self.last_checked_date,
+            "last_render_signature": self.last_render_signature,
         }
 
 
@@ -73,6 +79,8 @@ def default_settings() -> AutoRenderSettings:
         last_attempt_at=None,
         last_error=None,
         render_config=dict(DEFAULT_RENDER_CONFIG),
+        last_checked_date=None,
+        last_render_signature=None,
     )
 
 
@@ -113,17 +121,19 @@ def next_run_at(
     target_time_text: str,
     last_run_date: str | None,
     last_attempt_at: str | None = None,
+    last_checked_date: str | None = None,
 ) -> datetime:
     """Compute the next datetime the auto-render should fire.
 
-    If today's run already finished, schedule tomorrow. If the target time was
-    missed and no successful run is recorded, return an immediate catch-up time
-    unless a recent attempt is still inside the retry window.
+    If today's render or unchanged-input check already finished, schedule
+    tomorrow. If the target time was missed and no check is recorded, return an
+    immediate catch-up time unless a recent attempt is still inside the retry
+    window.
     """
     target = parse_time(target_time_text)
     today_target = datetime.combine(now.date(), target)
     today_iso = now.date().isoformat()
-    if last_run_date == today_iso:
+    if last_run_date == today_iso or last_checked_date == today_iso:
         return datetime.combine(now.date() + timedelta(days=1), target)
     if now < today_target:
         return today_target
@@ -157,6 +167,52 @@ def render_config_from_settings(settings: AutoRenderSettings) -> RenderConfig:
     return RenderConfig.model_validate(payload)
 
 
+def render_input_signature(
+    db: Database,
+    config: AppConfig,
+    project_id: int,
+    render_config: RenderConfig,
+) -> str:
+    """Fingerprint the inputs that can change an automatic render's output."""
+    canonical_rows = db.fetchall(
+        """
+        SELECT p.hash, p.captured_at, p.width, p.height, p.detected_at, p.landmarks_path
+        FROM photos p
+        JOIN project_photos pp ON pp.photo_hash = p.hash
+        WHERE pp.project_id = ? AND p.skipped = 0 AND p.landmarks_path IS NOT NULL
+        ORDER BY p.captured_at, p.hash
+        """,
+        (project_id,),
+    )
+    render_rows = _active_rows(db, project_id, render_config)
+    payload = {
+        "version": SIGNATURE_VERSION,
+        "project_id": project_id,
+        "render_config": render_config.model_dump(mode="json"),
+        "alignment_config": config.alignment.model_dump(mode="json"),
+        "canonical_photos": [
+            _signature_row(row, ["hash", "captured_at", "width", "height", "detected_at", "landmarks_path"])
+            for row in canonical_rows
+        ],
+        "render_photos": [
+            _signature_row(row, ["hash", "captured_at", "quality_score"])
+            for row in render_rows
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=_signature_value).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def auto_render_has_pending_changes(
+    db: Database,
+    config: AppConfig,
+    project_id: int,
+    settings: AutoRenderSettings,
+) -> bool:
+    render_config = render_config_from_settings(settings)
+    return render_input_signature(db, config, project_id, render_config) != settings.last_render_signature
+
+
 def kick_off_auto_render(
     db: Database,
     config: AppConfig,
@@ -164,8 +220,10 @@ def kick_off_auto_render(
     settings: AutoRenderSettings,
     *,
     job_name: str | None = None,
+    input_signature: str | None = None,
 ) -> tuple[str, int]:
     render_config = render_config_from_settings(settings)
+    input_signature = input_signature or render_input_signature(db, config, project_id, render_config)
     render_id = create_render_row(db, project_id, render_config)
     attempt_at = datetime.now()
     run_date = attempt_at.date().isoformat()
@@ -183,7 +241,7 @@ def kick_off_auto_render(
                 cancel_check=cancel_check,
             )
             result = render_project(db, config, project_id, render_config, render_id, progress, cancel_check)
-            _record_auto_render_success(config, render_id, run_date)
+            _record_auto_render_success(config, render_id, run_date, input_signature)
             return result
         except CancellationRequested as exc:
             mark_render_failed(db, render_id, str(exc), status="cancelled")
@@ -236,7 +294,13 @@ class AutoRenderScheduler:
                 if not settings.enabled:
                     await self._wait(min_seconds=60, max_seconds=300)
                     continue
-                next_run = next_run_at(datetime.now(), settings.time, settings.last_run_date, settings.last_attempt_at)
+                next_run = next_run_at(
+                    datetime.now(),
+                    settings.time,
+                    settings.last_run_date,
+                    settings.last_attempt_at,
+                    settings.last_checked_date,
+                )
                 wait_seconds = max(1.0, (next_run - datetime.now()).total_seconds())
                 logger.info(
                     "Auto-render scheduled for %s (in %.0f minutes)",
@@ -249,7 +313,13 @@ class AutoRenderScheduler:
                 if not settings.enabled:
                     continue
                 now = datetime.now()
-                if now < next_run_at(now, settings.time, settings.last_run_date, settings.last_attempt_at) - timedelta(seconds=30):
+                if now < next_run_at(
+                    now,
+                    settings.time,
+                    settings.last_run_date,
+                    settings.last_attempt_at,
+                    settings.last_checked_date,
+                ) - timedelta(seconds=30):
                     # We woke early; the time has been moved. Loop again.
                     continue
                 if settings.last_run_date == now.date().isoformat():
@@ -257,20 +327,30 @@ class AutoRenderScheduler:
                 project_id = primary_project_id(self.db, self.config)
                 if project_id is None:
                     logger.info("Auto-render skipped: no project exists yet")
-                    settings.last_run_date = now.date().isoformat()
-                    save_settings(self.config, settings)
+                    _record_auto_render_check(self.config, now.date().isoformat())
                     continue
-                if not _project_has_active_photos(self.db, project_id):
+                if not project_has_active_photos(self.db, project_id):
                     logger.info("Auto-render skipped: project has no active photos yet")
-                    settings.last_run_date = now.date().isoformat()
-                    save_settings(self.config, settings)
+                    _record_auto_render_check(self.config, now.date().isoformat())
                     continue
                 if runner.has_active_jobs():
                     logger.info("Auto-render delayed: another job is active")
                     await self._wait(min_seconds=300, max_seconds=300)
                     continue
+                render_config = render_config_from_settings(settings)
+                input_signature = render_input_signature(self.db, self.config, project_id, render_config)
+                if input_signature == settings.last_render_signature:
+                    logger.info("Auto-render skipped: inputs unchanged since last successful render")
+                    _record_auto_render_check(self.config, now.date().isoformat(), clear_error=True)
+                    continue
                 try:
-                    _job_id, _render_id = kick_off_auto_render(self.db, self.config, project_id, settings)
+                    _job_id, _render_id = kick_off_auto_render(
+                        self.db,
+                        self.config,
+                        project_id,
+                        settings,
+                        input_signature=input_signature,
+                    )
                 except Exception as exc:
                     logger.exception("Auto-render kickoff failed: %s", exc)
                     continue
@@ -289,7 +369,7 @@ class AutoRenderScheduler:
             pass
 
 
-def _project_has_active_photos(db: Database, project_id: int) -> bool:
+def project_has_active_photos(db: Database, project_id: int) -> bool:
     row = db.fetchone(
         """
         SELECT COUNT(*) AS n
@@ -310,11 +390,21 @@ def _record_auto_render_attempt(config: AppConfig, render_id: int, attempt_at: d
     save_settings(config, settings)
 
 
-def _record_auto_render_success(config: AppConfig, render_id: int, run_date: str) -> None:
+def _record_auto_render_success(config: AppConfig, render_id: int, run_date: str, input_signature: str) -> None:
     settings = load_settings(config)
     settings.last_run_date = run_date
+    settings.last_checked_date = run_date
     settings.last_render_id = render_id
+    settings.last_render_signature = input_signature
     settings.last_error = None
+    save_settings(config, settings)
+
+
+def _record_auto_render_check(config: AppConfig, run_date: str, *, clear_error: bool = False) -> None:
+    settings = load_settings(config)
+    settings.last_checked_date = run_date
+    if clear_error:
+        settings.last_error = None
     save_settings(config, settings)
 
 
@@ -323,6 +413,20 @@ def _record_auto_render_error(config: AppConfig, render_id: int, error: str) -> 
     settings.last_render_id = render_id
     settings.last_error = error
     save_settings(config, settings)
+
+
+def _signature_row(row, fields: list[str]) -> dict[str, Any]:
+    return {field: _signature_value(row[field]) for field in fields}
+
+
+def _signature_value(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ", timespec="microseconds")
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    return value
 
 
 def _parse_settings_datetime(value: str | None) -> datetime | None:
