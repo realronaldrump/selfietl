@@ -27,11 +27,7 @@ export function More({ onNavigate, onSwitchToDesktop }: { onNavigate: (target: M
         <MoreLink
           icon={<ScanFace className="h-5 w-5" />}
           label="Review"
-          description={
-            today?.project?.id
-              ? `Frames flagged by quality checks${today?.project ? "" : ""}`
-              : "Frames flagged by quality checks"
-          }
+          description="Frames flagged by quality checks."
           onClick={() => onNavigate("review")}
         />
         <MoreLink

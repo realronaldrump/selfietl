@@ -1,20 +1,34 @@
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Loader2 } from "lucide-react";
 import { api } from "@/api/client";
 import { EmptyProject, Layout, type PageKey } from "@/components/Layout";
 import { MobileLayout, type MobileTab } from "@/components/MobileLayout";
-import { AutoRenderSettings } from "@/pages/AutoRenderSettings";
-import { Capture } from "@/pages/Capture";
-import { Grid } from "@/pages/Grid";
-import { History } from "@/pages/History";
-import { More, type MoreTarget } from "@/pages/More";
-import { Outliers } from "@/pages/Outliers";
-import { Render } from "@/pages/Render";
-import { Setup } from "@/pages/Setup";
-import { Stats } from "@/pages/Stats";
-import { Timeline } from "@/pages/Timeline";
-import { Today, type TodayPageAction } from "@/pages/Today";
-import { Video } from "@/pages/Video";
+import type { MoreTarget } from "@/pages/More";
+import type { TodayPageAction } from "@/pages/Today";
+
+// Pages are code-split so the initial mobile bundle stays small. The heavier
+// admin views (Stats pulls in recharts, Render, etc.) only download on demand.
+const AutoRenderSettings = lazy(() => import("@/pages/AutoRenderSettings").then((m) => ({ default: m.AutoRenderSettings })));
+const Capture = lazy(() => import("@/pages/Capture").then((m) => ({ default: m.Capture })));
+const Grid = lazy(() => import("@/pages/Grid").then((m) => ({ default: m.Grid })));
+const History = lazy(() => import("@/pages/History").then((m) => ({ default: m.History })));
+const More = lazy(() => import("@/pages/More").then((m) => ({ default: m.More })));
+const Outliers = lazy(() => import("@/pages/Outliers").then((m) => ({ default: m.Outliers })));
+const Render = lazy(() => import("@/pages/Render").then((m) => ({ default: m.Render })));
+const Setup = lazy(() => import("@/pages/Setup").then((m) => ({ default: m.Setup })));
+const Stats = lazy(() => import("@/pages/Stats").then((m) => ({ default: m.Stats })));
+const Timeline = lazy(() => import("@/pages/Timeline").then((m) => ({ default: m.Timeline })));
+const Today = lazy(() => import("@/pages/Today").then((m) => ({ default: m.Today })));
+const Video = lazy(() => import("@/pages/Video").then((m) => ({ default: m.Video })));
+
+function PageLoading() {
+  return (
+    <div className="flex min-h-[60vh] items-center justify-center" role="status" aria-label="Loading">
+      <Loader2 className="h-6 w-6 animate-spin text-ink/40" />
+    </div>
+  );
+}
 
 const PROJECT_KEY = "selfietl.projectId";
 const LAYOUT_KEY = "selfietl.layout";
@@ -105,7 +119,7 @@ function MobileApp({ onSwitchToDesktop }: { onSwitchToDesktop: () => void }) {
 
   return (
     <MobileLayout active={activeTab} onChange={(tab) => setPage(tab)}>
-      {content()}
+      <Suspense fallback={<PageLoading />}>{content()}</Suspense>
     </MobileLayout>
   );
 }
@@ -238,7 +252,7 @@ function DesktopApp({ onSwitchToMobile }: { onSwitchToMobile: () => void }) {
       onProjectChange={setSelectedProjectId}
       onSwitchToMobile={onSwitchToMobile}
     >
-      {content}
+      <Suspense fallback={<PageLoading />}>{content}</Suspense>
     </Layout>
   );
 }

@@ -15,7 +15,14 @@ export function MobileLayout({
   onChange: (tab: MobileNavTarget) => void;
   children: React.ReactNode;
 }) {
-  const jobsQuery = useQuery({ queryKey: ["jobs"], queryFn: api.jobs, refetchInterval: 1500 });
+  const jobsQuery = useQuery({
+    queryKey: ["jobs"],
+    queryFn: api.jobs,
+    // Poll quickly while something is running, but back off when idle so we are
+    // not hammering the API (and the phone's radio) every 1.5s all day long.
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some((job) => job.status === "queued" || job.status === "running") ? 1500 : 10_000,
+  });
   const visibleJob = jobsQuery.data?.find((job) => ["queued", "running"].includes(job.status)) ?? null;
 
   return (
@@ -72,6 +79,8 @@ function TabButton({
     <button
       type="button"
       onClick={onClick}
+      aria-current={active ? "page" : undefined}
+      aria-label={label}
       className={cn(
         "flex min-h-14 flex-col items-center justify-center gap-0.5 text-[0.62rem] font-black uppercase tracking-[0.16em] transition",
         active ? "text-ink" : "text-ink/45 hover:text-ink/65",

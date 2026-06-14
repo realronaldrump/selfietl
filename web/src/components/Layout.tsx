@@ -68,7 +68,12 @@ export function Layout({
   onSwitchToMobile?: () => void;
   children: React.ReactNode;
 }) {
-  const jobsQuery = useQuery({ queryKey: ["jobs"], queryFn: api.jobs, refetchInterval: 1200 });
+  const jobsQuery = useQuery({
+    queryKey: ["jobs"],
+    queryFn: api.jobs,
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some((job) => job.status === "queued" || job.status === "running") ? 1200 : 10_000,
+  });
   const currentJob = pickVisibleJob(jobsQuery.data ?? []);
 
   return (

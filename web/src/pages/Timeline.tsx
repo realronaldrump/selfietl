@@ -124,7 +124,13 @@ function CalendarGrid({
               )}
             >
               {day?.thumb_url ? (
-                <img src={apiUrl(day.thumb_url)} alt="" className="absolute inset-0 h-full w-full object-cover opacity-90" />
+                <img
+                  src={apiUrl(day.thumb_url)}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  className="absolute inset-0 h-full w-full object-cover opacity-90"
+                />
               ) : null}
               <span
                 className={cn(
@@ -170,7 +176,7 @@ function RecentList({
           >
             <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md bg-ink">
               {day.thumb_url ? (
-                <img src={apiUrl(day.thumb_url)} alt="" className="h-full w-full object-cover" />
+                <img src={apiUrl(day.thumb_url)} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
               ) : (
                 <div className="grid h-full w-full place-items-center text-paper/55 text-xs">—</div>
               )}
@@ -285,7 +291,13 @@ function DaySheet({ day, onClose, onDateChanged }: { day: string; onClose: () =>
                     capture.hash === photo?.hash ? "border-teal ring-2 ring-teal/25" : "border-ink/10",
                   )}
                 >
-                  <img src={apiUrl(capture.thumb_url)} alt="" className="aspect-square w-full object-cover transition group-hover:opacity-85" />
+                  <img
+                    src={apiUrl(capture.thumb_url)}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    className="aspect-square w-full object-cover transition group-hover:opacity-85"
+                  />
                   <div className="truncate bg-paper px-2 py-1 text-[0.65rem] font-black text-ink/65">
                     {formatCaptureTime(capture.captured_at)}
                   </div>

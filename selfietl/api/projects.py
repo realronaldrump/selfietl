@@ -39,8 +39,22 @@ def create_project_endpoint(
 
 @router.get("", response_model=list[ProjectResponse])
 def list_projects(db: Database = Depends(get_db)):
-    rows = db.fetchall("SELECT id FROM projects ORDER BY created_at DESC")
-    return [_project_response(db, row["id"]) for row in rows]
+    rows = db.fetchall("SELECT * FROM projects ORDER BY created_at DESC")
+    if not rows:
+        return []
+    count_rows = db.fetchall(
+        """
+        SELECT pp.project_id AS project_id,
+               COUNT(*) AS total,
+               SUM(CASE WHEN p.skipped = 0 THEN 1 ELSE 0 END) AS active,
+               SUM(CASE WHEN p.skipped = 1 THEN 1 ELSE 0 END) AS skipped
+        FROM project_photos pp
+        JOIN photos p ON p.hash = pp.photo_hash
+        GROUP BY pp.project_id
+        """
+    )
+    counts_by_project = {row["project_id"]: row for row in count_rows}
+    return [_project_response_from_row(row, counts_by_project.get(row["id"])) for row in rows]
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
@@ -124,6 +138,10 @@ def _project_response(db: Database, project_id: int) -> ProjectResponse:
         """,
         (project_id,),
     )
+    return _project_response_from_row(row, counts)
+
+
+def _project_response_from_row(row, counts) -> ProjectResponse:
     config_payload = None
     if row["config_json"]:
         try:
@@ -137,9 +155,9 @@ def _project_response(db: Database, project_id: int) -> ProjectResponse:
         created_at=row["created_at"],
         canonical_landmarks_path=row["canonical_landmarks_path"],
         config=config_payload,
-        photo_count=int(counts["total"] or 0),
-        active_count=int(counts["active"] or 0),
-        skipped_count=int(counts["skipped"] or 0),
+        photo_count=int(counts["total"]) if counts and counts["total"] is not None else 0,
+        active_count=int(counts["active"]) if counts and counts["active"] is not None else 0,
+        skipped_count=int(counts["skipped"]) if counts and counts["skipped"] is not None else 0,
     )
 
 

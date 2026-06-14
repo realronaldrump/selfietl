@@ -52,6 +52,7 @@ export function Today({ onAction }: { onAction: (action: TodayPageAction) => voi
             <img
               src={apiUrl(photo.aligned_url || photo.image_url)}
               alt="Today's selfie"
+              decoding="async"
               className="h-full w-full object-cover"
               onError={(event) => {
                 const target = event.currentTarget;
@@ -147,7 +148,7 @@ export function Today({ onAction }: { onAction: (action: TodayPageAction) => voi
                 poster={renderPosterUrl(today.latest_render.id)}
                 controls
                 playsInline
-                preload="metadata"
+                preload="none"
               />
             </div>
           ) : (

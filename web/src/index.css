@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 :root {
   color: #111412;
   background: #eef1ed;
@@ -9,6 +14,7 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
 }
 
 * {
@@ -19,6 +25,9 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  /* dvh keeps the layout stable as mobile browser chrome shows/hides. */
+  min-height: 100dvh;
+  overscroll-behavior-y: none;
   background:
     linear-gradient(90deg, rgba(17, 20, 18, 0.035) 1px, transparent 1px),
     linear-gradient(180deg, rgba(17, 20, 18, 0.035) 1px, transparent 1px),
@@ -28,10 +37,40 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
+}
+
+/* Removes the 300ms tap delay and keeps taps crisp on touch devices. */
+button,
+a,
+[role="button"],
+label {
+  touch-action: manipulation;
+}
+
+input,
+select,
+textarea {
+  accent-color: #1f7a75;
+}
+
+img {
+  -webkit-user-drag: none;
 }
 
 .scrollbar-thin {
   scrollbar-width: thin;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
