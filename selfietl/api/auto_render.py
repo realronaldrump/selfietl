@@ -4,9 +4,10 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import ValidationError
 
 from selfietl.api.deps import get_config, get_db
-from selfietl.config import AppConfig
+from selfietl.config import AppConfig, RenderConfig
 from selfietl.db import Database
 from selfietl.jobs.runner import JobsPaused, runner
 from selfietl.models import (
@@ -23,7 +24,7 @@ from selfietl.scheduler import (
     parse_time,
     project_has_active_photos,
     primary_project_id,
-    save_settings,
+    update_settings,
 )
 
 router = APIRouter(prefix="/auto-render", tags=["auto-render"])
@@ -102,21 +103,25 @@ def update_auto_render(
     db: Database = Depends(get_db),
     config: AppConfig = Depends(get_config),
 ):
-    settings = load_settings(config)
-    if payload.enabled is not None:
-        settings.enabled = bool(payload.enabled)
-    if payload.time is not None:
-        try:
-            parse_time(payload.time)
-        except (ValueError, IndexError) as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid time: {exc}") from exc
-        settings.time = payload.time
-    if payload.render_config is not None:
-        merged = dict(DEFAULT_RENDER_CONFIG)
-        merged.update(settings.render_config or {})
-        merged.update(payload.render_config)
-        settings.render_config = merged
-    save_settings(config, settings)
+    def mutate(settings) -> None:
+        if payload.enabled is not None:
+            settings.enabled = bool(payload.enabled)
+        if payload.time is not None:
+            try:
+                parsed_time = parse_time(payload.time)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid time: {exc}") from exc
+            settings.time = parsed_time.strftime("%H:%M")
+        if payload.render_config is not None:
+            merged = dict(DEFAULT_RENDER_CONFIG)
+            merged.update(settings.render_config or {})
+            merged.update(payload.render_config)
+            try:
+                settings.render_config = RenderConfig.model_validate(merged).model_dump(mode="json")
+            except ValidationError as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid render config: {exc.errors()[0]['msg']}") from exc
+
+    update_settings(config, mutate)
     scheduler = _scheduler(request)
     if scheduler is not None:
         scheduler.notify()
@@ -132,6 +137,8 @@ async def run_auto_render_now(
     project_id = primary_project_id(db, config)
     if project_id is None:
         raise HTTPException(status_code=400, detail="No project exists yet. Take a selfie first.")
+    if not project_has_active_photos(db, project_id):
+        raise HTTPException(status_code=400, detail="No included photos are ready to render yet.")
     if runner.has_active_jobs():
         raise HTTPException(status_code=409, detail="The app is busy. Try again in a moment.")
     settings = load_settings(config)

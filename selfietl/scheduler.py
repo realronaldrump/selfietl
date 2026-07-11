@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
+import re
+import threading
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+from pydantic import ValidationError
 
 from selfietl.config import AppConfig, RenderConfig
 from selfietl.db import Database
@@ -38,6 +43,7 @@ DEFAULT_RENDER_CONFIG = {
 
 logger = logging.getLogger("selfietl.scheduler")
 SIGNATURE_VERSION = 1
+_SETTINGS_LOCK = threading.RLock()
 
 
 @dataclass
@@ -48,7 +54,7 @@ class AutoRenderSettings:
     last_render_id: int | None = None
     last_attempt_at: str | None = None
     last_error: str | None = None
-    render_config: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_RENDER_CONFIG))
+    render_config: dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_RENDER_CONFIG))
     last_checked_date: str | None = None
     last_render_signature: str | None = None
 
@@ -78,41 +84,84 @@ def default_settings() -> AutoRenderSettings:
         last_render_id=None,
         last_attempt_at=None,
         last_error=None,
-        render_config=dict(DEFAULT_RENDER_CONFIG),
+        render_config=copy.deepcopy(DEFAULT_RENDER_CONFIG),
         last_checked_date=None,
         last_render_signature=None,
     )
 
 
 def load_settings(config: AppConfig) -> AutoRenderSettings:
+    with _SETTINGS_LOCK:
+        return _load_settings_unlocked(config)
+
+
+def _load_settings_unlocked(config: AppConfig) -> AutoRenderSettings:
+    settings = default_settings()
     path = settings_path(config)
-    base = default_settings().to_dict()
-    if path.exists():
+    if not path.exists():
+        return settings
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return settings
+    if not isinstance(payload, dict):
+        return settings
+
+    if isinstance(payload.get("enabled"), bool):
+        settings.enabled = payload["enabled"]
+    if isinstance(payload.get("time"), str):
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            for key, value in payload.items():
-                if key in base:
-                    if key == "render_config" and isinstance(value, dict):
-                        merged = dict(base[key])
-                        merged.update(value)
-                        base[key] = merged
-                    else:
-                        base[key] = value
-        except (OSError, json.JSONDecodeError):
+            settings.time = parse_time(payload["time"]).strftime("%H:%M")
+        except ValueError:
             pass
-    return AutoRenderSettings(**base)
+    for key in ("last_run_date", "last_attempt_at", "last_error", "last_checked_date", "last_render_signature"):
+        value = payload.get(key)
+        if value is None or isinstance(value, str):
+            setattr(settings, key, value)
+    render_id = payload.get("last_render_id")
+    if render_id is None or isinstance(render_id, int) and not isinstance(render_id, bool):
+        settings.last_render_id = render_id
+    if isinstance(payload.get("render_config"), dict):
+        merged = copy.deepcopy(DEFAULT_RENDER_CONFIG)
+        merged.update(payload["render_config"])
+        try:
+            settings.render_config = RenderConfig.model_validate(merged).model_dump(mode="json")
+        except ValidationError:
+            pass
+    return settings
 
 
 def save_settings(config: AppConfig, settings: AutoRenderSettings) -> None:
+    with _SETTINGS_LOCK:
+        _save_settings_unlocked(config, settings)
+
+
+def _save_settings_unlocked(config: AppConfig, settings: AutoRenderSettings) -> None:
     path = settings_path(config)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(settings.to_dict(), indent=2, default=str), encoding="utf-8")
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(json.dumps(settings.to_dict(), indent=2, default=str), encoding="utf-8")
+    temporary.replace(path)
+
+
+def update_settings(
+    config: AppConfig,
+    mutation: Callable[[AutoRenderSettings], None],
+) -> AutoRenderSettings:
+    with _SETTINGS_LOCK:
+        settings = _load_settings_unlocked(config)
+        mutation(settings)
+        _save_settings_unlocked(config, settings)
+        return settings
 
 
 def parse_time(text: str) -> time:
-    parts = (text or DEFAULT_RENDER_TIME).split(":")
-    hour = max(0, min(23, int(parts[0])))
-    minute = max(0, min(59, int(parts[1]))) if len(parts) > 1 else 0
+    match = re.fullmatch(r"(\d{2}):(\d{2})", text or "")
+    if match is None:
+        raise ValueError("time must use 24-hour HH:MM format")
+    hour, minute = (int(part) for part in match.groups())
+    if hour > 23 or minute > 59:
+        raise ValueError("time must be between 00:00 and 23:59")
     return time(hour=hour, minute=minute)
 
 
@@ -383,36 +432,40 @@ def project_has_active_photos(db: Database, project_id: int) -> bool:
 
 
 def _record_auto_render_attempt(config: AppConfig, render_id: int, attempt_at: datetime) -> None:
-    settings = load_settings(config)
-    settings.last_render_id = render_id
-    settings.last_attempt_at = attempt_at.isoformat(sep=" ", timespec="seconds")
-    settings.last_error = None
-    save_settings(config, settings)
+    def mutate(settings: AutoRenderSettings) -> None:
+        settings.last_render_id = render_id
+        settings.last_attempt_at = attempt_at.isoformat(sep=" ", timespec="seconds")
+        settings.last_error = None
+
+    update_settings(config, mutate)
 
 
 def _record_auto_render_success(config: AppConfig, render_id: int, run_date: str, input_signature: str) -> None:
-    settings = load_settings(config)
-    settings.last_run_date = run_date
-    settings.last_checked_date = run_date
-    settings.last_render_id = render_id
-    settings.last_render_signature = input_signature
-    settings.last_error = None
-    save_settings(config, settings)
+    def mutate(settings: AutoRenderSettings) -> None:
+        settings.last_run_date = run_date
+        settings.last_checked_date = run_date
+        settings.last_render_id = render_id
+        settings.last_render_signature = input_signature
+        settings.last_error = None
+
+    update_settings(config, mutate)
 
 
 def _record_auto_render_check(config: AppConfig, run_date: str, *, clear_error: bool = False) -> None:
-    settings = load_settings(config)
-    settings.last_checked_date = run_date
-    if clear_error:
-        settings.last_error = None
-    save_settings(config, settings)
+    def mutate(settings: AutoRenderSettings) -> None:
+        settings.last_checked_date = run_date
+        if clear_error:
+            settings.last_error = None
+
+    update_settings(config, mutate)
 
 
 def _record_auto_render_error(config: AppConfig, render_id: int, error: str) -> None:
-    settings = load_settings(config)
-    settings.last_render_id = render_id
-    settings.last_error = error
-    save_settings(config, settings)
+    def mutate(settings: AutoRenderSettings) -> None:
+        settings.last_render_id = render_id
+        settings.last_error = error
+
+    update_settings(config, mutate)
 
 
 def _signature_row(row, fields: list[str]) -> dict[str, Any]:

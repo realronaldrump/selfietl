@@ -60,7 +60,7 @@ def patch_photo(photo_hash: str, payload: PatchPhotoRequest, db: Database = Depe
         raise HTTPException(status_code=404, detail="Photo not found")
     skipped = row["skipped"] if payload.skipped is None else int(payload.skipped)
     user_override = row["user_override"] if payload.user_override is None else int(payload.user_override)
-    skip_reason = payload.skip_reason
+    skip_reason = payload.skip_reason if "skip_reason" in payload.model_fields_set else row["skip_reason"]
     captured_at = row["captured_at"]
     warnings_json = row["warnings_json"] if "warnings_json" in row.keys() else "[]"
     if payload.skipped is False:

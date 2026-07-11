@@ -92,7 +92,8 @@ def reset(payload: ResetRequest, config: AppConfig = Depends(get_config), db: Da
 
 def get_inbox_status(config: AppConfig, db: Database) -> InboxStatusResponse:
     path = default_source_folder(config)
-    files = [item for item in path.iterdir() if item.is_file()]
+    entries = list(path.rglob("*"))
+    files = [item for item in entries if item.is_file()]
     supported = [item for item in files if is_supported_image(item)]
     project = db.fetchone(
         "SELECT id, last_scanned_at FROM projects WHERE source_folder = ? ORDER BY created_at DESC LIMIT 1",
@@ -115,7 +116,7 @@ def get_inbox_status(config: AppConfig, db: Database) -> InboxStatusResponse:
         )
         cataloged = int(counts["cataloged"] or 0)
         detected = int(counts["detected"] or 0)
-    latest_mtime = max((item.stat().st_mtime for item in supported), default=0)
+    latest_mtime = _latest_mtime([path, *entries])
     last_scan_ts = _parse_timestamp(last_scanned_at).timestamp() if last_scanned_at else 0
     return InboxStatusResponse(
         path=str(path),
@@ -157,6 +158,16 @@ def _parse_timestamp(value: str | None) -> datetime:
         except ValueError:
             continue
     return datetime.fromisoformat(value)
+
+
+def _latest_mtime(paths: list[Path]) -> float:
+    latest = 0.0
+    for path in paths:
+        try:
+            latest = max(latest, path.stat().st_mtime)
+        except OSError:
+            continue
+    return latest
 
 
 def default_source_folder(config: AppConfig) -> Path:

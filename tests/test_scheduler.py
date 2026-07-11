@@ -79,6 +79,24 @@ def test_settings_default_when_file_missing(tmp_path):
     assert settings.time == DEFAULT_RENDER_TIME
 
 
+def test_settings_recover_from_invalid_json_shape_and_values(tmp_path):
+    config = load_config(tmp_path / "home")
+    config.data_dir.joinpath("auto_render.json").write_text(
+        '{"enabled": "yes", "time": "99:99", "render_config": {"fps": 0}}',
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config)
+
+    assert settings.enabled is True
+    assert settings.time == DEFAULT_RENDER_TIME
+    assert settings.render_config["fps"] == 30
+
+    config.data_dir.joinpath("auto_render.json").write_text("[]", encoding="utf-8")
+    recovered = load_settings(config)
+    assert recovered.time == DEFAULT_RENDER_TIME
+
+
 def test_primary_project_id_prefers_inbox(tmp_path):
     config = load_config(tmp_path / "home")
     db = Database(config.db_path)

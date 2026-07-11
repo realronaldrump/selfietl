@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 
 from selfietl.api.deps import get_config, get_db
 from selfietl.config import AppConfig
-from selfietl.db import Database, row_to_dict
+from selfietl.db import Database
 from selfietl.jobs.runner import JobsPaused, runner
 from selfietl.models import CreateProjectRequest, ProjectResponse, StartJobResponse
 from selfietl.pipeline.canonical import compute_canonical_face, project_stats

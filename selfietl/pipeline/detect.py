@@ -61,7 +61,10 @@ def detect_project(
     skipped = 0
     failed = 0
     warnings: list[dict] = []
-    face_mesh = _create_mediapipe_face_mesh(config)
+    try:
+        face_mesh = _create_mediapipe_face_mesh(config)
+    except Exception:
+        face_mesh = None
 
     try:
         for idx, row in enumerate(rows):
@@ -284,18 +287,18 @@ def _detect_with_opencv(path: Path, config: AppConfig) -> DetectionResult:
         return _empty_result(["opencv_unavailable"], "none")
 
     try:
-        image = open_oriented_image(path)
-        arr = np.asarray(image)
-        resized, scale = _resize_for_detection(arr, config.detection.max_detection_side)
-        gray = cv2.cvtColor(resized, cv2.COLOR_RGB2GRAY)
-        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        classifier = cv2.CascadeClassifier(cascade_path)
-        faces = classifier.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(64, 64))
-        if len(faces) == 0:
-            return _empty_result(["no_face_detected"], "opencv")
-        faces = sorted(faces, key=lambda f: f[2] * f[3], reverse=True)
-        x, y, w, h = [float(v) / scale for v in faces[0]]
-        bbox = (x / image.width, y / image.height, w / image.width, h / image.height)
+        with open_oriented_image(path) as image:
+            arr = np.asarray(image)
+            resized, scale = _resize_for_detection(arr, config.detection.max_detection_side)
+            gray = cv2.cvtColor(resized, cv2.COLOR_RGB2GRAY)
+            cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+            classifier = cv2.CascadeClassifier(cascade_path)
+            faces = classifier.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(64, 64))
+            if len(faces) == 0:
+                return _empty_result(["no_face_detected"], "opencv")
+            faces = sorted(faces, key=lambda f: f[2] * f[3], reverse=True)
+            x, y, w, h = [float(v) / scale for v in faces[0]]
+            bbox = (x / image.width, y / image.height, w / image.width, h / image.height)
         warnings = ["opencv_face_detected_without_landmarks"]
         if len(faces) > 1:
             warnings.append("multiple_faces_largest_selected")

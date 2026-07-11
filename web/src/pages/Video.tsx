@@ -103,6 +103,11 @@ export function Video({ onSettings }: { onSettings: () => void }) {
             </div>
           </div>
         ) : null}
+        {renderNowMutation.error ? (
+          <div role="alert" className="border-t border-coral/20 bg-coral/10 px-4 py-3 text-xs font-semibold text-coral">
+            {renderNowMutation.error.message}
+          </div>
+        ) : null}
       </Panel>
 
       <AutoSummary auto={autoQuery.data} onSettings={onSettings} />

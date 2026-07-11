@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from selfietl.api.deps import get_config, get_db
 from selfietl.config import AppConfig
 from selfietl.db import Database
-from selfietl.jobs.runner import JobsPaused, runner
+from selfietl.jobs.runner import CancellationRequested, JobsPaused, runner
 from selfietl.models import (
     CapturePreviewResponse,
     CaptureResponse,
@@ -204,6 +204,8 @@ async def capture_photo_batch(
                 if result.get("duplicate_of"):
                     duplicates += 1
                 succeeded += 1
+            except CancellationRequested:
+                raise
             except Exception as exc:
                 failed += 1
                 results.append(
@@ -450,12 +452,17 @@ def selfie_calendar(
     db: Database = Depends(get_db),
     config: AppConfig = Depends(get_config),
 ):
+    today = date.today()
+    try:
+        end_date = date.fromisoformat(end) if end else today
+        start_date = date.fromisoformat(start) if start else end_date - timedelta(days=180)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="start and end must be YYYY-MM-DD") from exc
+    if start_date > end_date:
+        raise HTTPException(status_code=400, detail="start must be on or before end")
     project_id = primary_project_id(db, config)
     if project_id is None:
-        return {"days": []}
-    today = date.today()
-    end_date = date.fromisoformat(end) if end else today
-    start_date = date.fromisoformat(start) if start else end_date - timedelta(days=180)
+        return {"days": [], "start": start_date.isoformat(), "end": end_date.isoformat()}
     rows = db.fetchall(
         """
         SELECT date(p.captured_at) AS day,

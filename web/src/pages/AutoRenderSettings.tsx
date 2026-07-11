@@ -44,6 +44,16 @@ export function AutoRenderSettings({ onBack }: { onBack: () => void }) {
     },
   });
 
+  if (autoQuery.isError && !draft) {
+    return (
+      <div role="alert">
+        <Panel className="border border-coral/25 bg-coral/10 text-sm font-semibold text-coral">
+          Could not load auto-render settings: {autoQuery.error.message}
+        </Panel>
+      </div>
+    );
+  }
+
   if (!draft) {
     return (
       <Panel className="text-sm font-semibold text-ink/55">
@@ -279,6 +289,13 @@ export function AutoRenderSettings({ onBack }: { onBack: () => void }) {
           {runNowMutation.isPending ? "Starting…" : "Run a render now"}
         </Button>
       </div>
+      {updateMutation.error || runNowMutation.error ? (
+        <div role="alert">
+          <Panel className="border border-coral/25 bg-coral/10 text-sm font-semibold text-coral">
+            {(updateMutation.error ?? runNowMutation.error)?.message}
+          </Panel>
+        </div>
+      ) : null}
     </PageFrame>
   );
 }

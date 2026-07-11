@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -61,8 +60,11 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
         @app.get("/{path:path}", include_in_schema=False)
         def spa(path: str):
-            candidate = dist / path
-            if candidate.exists() and candidate.is_file():
+            if path == "api" or path.startswith("api/"):
+                raise HTTPException(status_code=404, detail="API endpoint not found")
+            dist_root = dist.resolve()
+            candidate = (dist_root / path).resolve()
+            if candidate.is_relative_to(dist_root) and candidate.is_file():
                 return FileResponse(candidate)
             return FileResponse(dist / "index.html")
     else:
@@ -80,5 +82,8 @@ def _web_dist() -> Path:
     return Path(__file__).resolve().parents[1] / "web" / "dist"
 
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-app = create_app()
+def __getattr__(name: str):
+    """Keep ``uvicorn selfietl.server:app`` compatible without import-time I/O."""
+    if name == "app":
+        return create_app()
+    raise AttributeError(name)

@@ -2,15 +2,17 @@
  * Caches the app shell for fast launches when used as a Home Screen app.
  * Always bypasses the cache for /api/* so dynamic data is fresh.
  */
-const SHELL_CACHE = "selfietl-shell-v2";
+const SHELL_CACHE = "selfietl-shell-v3";
+const SCOPE_PATH = new URL(self.registration.scope).pathname.replace(/\/$/, "");
+const scoped = (path) => `${SCOPE_PATH}${path}` || "/";
 const SHELL_FILES = [
-  "/",
-  "/index.html",
-  "/manifest.webmanifest",
-  "/icon.svg",
-  "/icon-192.png",
-  "/icon-512.png",
-  "/apple-touch-icon.png",
+  scoped("/"),
+  scoped("/index.html"),
+  scoped("/manifest.webmanifest"),
+  scoped("/icon.svg"),
+  scoped("/icon-192.png"),
+  scoped("/icon-512.png"),
+  scoped("/apple-touch-icon.png"),
 ];
 
 self.addEventListener("install", (event) => {
@@ -34,11 +36,11 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith("/api/")) return;
+  if (url.pathname.startsWith(scoped("/api/"))) return;
 
   if (request.mode === "navigate") {
     event.respondWith(
-      fetch(request).catch(() => caches.match("/index.html").then((cached) => cached || Response.error())),
+      fetch(request).catch(() => caches.match(scoped("/index.html")).then((cached) => cached || Response.error())),
     );
     return;
   }
@@ -48,13 +50,13 @@ self.addEventListener("fetch", (event) => {
       if (cached) return cached;
       return fetch(request)
         .then((response) => {
-          if (response.ok && (url.pathname.startsWith("/assets/") || SHELL_FILES.includes(url.pathname))) {
+          if (response.ok && (url.pathname.startsWith(scoped("/assets/")) || SHELL_FILES.includes(url.pathname))) {
             const clone = response.clone();
             caches.open(SHELL_CACHE).then((cache) => cache.put(request, clone));
           }
           return response;
         })
-        .catch(() => caches.match("/index.html").then((cached) => cached || Response.error()));
+        .catch(() => Response.error());
     }),
   );
 });

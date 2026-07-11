@@ -2,45 +2,46 @@ from __future__ import annotations
 
 import os
 import tomllib
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class DetectionConfig(BaseModel):
     model: str = "mediapipe_face_mesh"
     refine_landmarks: bool = True
-    min_detection_confidence: float = 0.5
-    max_detection_side: int = 2048
+    min_detection_confidence: float = Field(default=0.5, ge=0, le=1)
+    max_detection_side: int = Field(default=2048, ge=64, le=16384)
 
 
 class QualityConfig(BaseModel):
-    threshold: float = 0.6
-    max_yaw_degrees: float = 25
-    max_pitch_degrees: float = 20
-    max_roll_degrees: float = 20
-    min_eye_open_ratio: float = 0.18
-    landmark_zscore_threshold: float = 3.0
+    threshold: float = Field(default=0.6, ge=0, le=1)
+    max_yaw_degrees: float = Field(default=25, gt=0, le=180)
+    max_pitch_degrees: float = Field(default=20, gt=0, le=180)
+    max_roll_degrees: float = Field(default=20, gt=0, le=180)
+    min_eye_open_ratio: float = Field(default=0.18, gt=0, le=1)
+    landmark_zscore_threshold: float = Field(default=3.0, gt=0)
 
 
 class AlignmentConfig(BaseModel):
     mode: Literal["similarity", "affine"] = "similarity"
     interpolation: Literal["lanczos4", "cubic", "linear"] = "lanczos4"
     output_format: Literal["jpg", "png"] = "jpg"
-    output_quality: int = 95
+    output_quality: int = Field(default=95, ge=1, le=100)
     preserve_exif: bool = True
 
 
 class MorphConfig(BaseModel):
     mode: Literal["landmark_delaunay", "rife", "none"] = "landmark_delaunay"
-    intermediate_frames: int = 8
+    intermediate_frames: int = Field(default=8, ge=0, le=60)
 
 
 class ExportDefaults(BaseModel):
-    fps: int = 30
+    fps: int = Field(default=30, ge=1, le=120)
     codec: Literal["h264", "h265"] = "h264"
-    crf: int = 18
+    crf: int = Field(default=18, ge=0, le=51)
     pixel_format: str = "yuv420p"
 
 
@@ -49,11 +50,13 @@ class DateOverlayConfig(BaseModel):
     # Kept for older saved configs/API payloads; the renderer uses a fixed full-date label.
     format: str = "%B %-d, %Y"
     position: Literal["bottom-right", "bottom-left", "top-right", "top-left"] = "bottom-right"
-    font_size_px: int = 48
-    opacity: float = 0.85
+    font_size_px: int = Field(default=48, ge=1, le=512)
+    opacity: float = Field(default=0.85, ge=0, le=1)
 
 
 class RenderConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     alignment_mode: Literal["similarity", "affine"] = "similarity"
     morph_mode: Literal["landmark_delaunay", "rife", "none"] = "landmark_delaunay"
     intermediate_frames: int = Field(default=8, ge=0, le=60)
@@ -71,6 +74,32 @@ class RenderConfig(BaseModel):
     codec: Literal["h264", "h265"] = "h264"
     crf: int = Field(default=18, ge=0, le=51)
     output_path: str | None = None
+
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def validate_date_boundary(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        text = value.strip()
+        try:
+            datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("must be an ISO 8601 date or datetime") from exc
+        return text
+
+    @field_validator("audio_path", "output_path")
+    @classmethod
+    def normalize_optional_path(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
+
+    @model_validator(mode="after")
+    def validate_date_order(self) -> "RenderConfig":
+        if self.start_date and self.end_date:
+            start = _comparable_datetime(self.start_date)
+            end = _comparable_datetime(self.end_date)
+            if start > end:
+                raise ValueError("start_date must be on or before end_date")
+        return self
 
 
 class AppConfig(BaseModel):
@@ -185,3 +214,10 @@ crf = 18
 pixel_format = "yuv420p"
 """
     config.config_path.write_text(text, encoding="utf-8")
+
+
+def _comparable_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed

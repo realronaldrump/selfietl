@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import math
 from pathlib import Path
 from typing import Callable
@@ -118,6 +117,7 @@ def compute_canonical_face(
         raise RuntimeError("No detected, active photos are available for canonical face computation")
 
     shapes: list[np.ndarray] = []
+    valid_rows = []
     hashes: list[str] = []
     sizes: list[tuple[int, int]] = []
     for row in rows:
@@ -128,11 +128,15 @@ def compute_canonical_face(
         if landmarks.shape[0] < 3:
             continue
         shapes.append(landmarks)
+        valid_rows.append(row)
         hashes.append(row["hash"])
         sizes.append((int(row["width"]), int(row["height"])))
 
     if not shapes:
         raise RuntimeError("Detected photos did not contain enough landmarks")
+
+    landmark_count = min(len(shape) for shape in shapes)
+    shapes = [shape[:landmark_count] for shape in shapes]
 
     reference = shapes[0]
     for _ in range(4):
@@ -172,12 +176,12 @@ def compute_canonical_face(
     zscores = (residual_arr - mean) / std
 
     with db.connect() as conn:
-        for idx, row in enumerate(rows):
+        for idx, row in enumerate(valid_rows):
             if cancel_check:
                 cancel_check()
             zscore = max(0.0, float(zscores[idx]))
             quality = compute_quality_score(
-                confidence=row["quality_score"] if row["quality_score"] is not None else 1.0,
+                confidence=1.0,
                 yaw=row["yaw"],
                 pitch=row["pitch"],
                 roll=row["roll"],
@@ -204,7 +208,7 @@ def compute_canonical_face(
                 (quality, should_skip, should_skip, reason, row["hash"]),
             )
             if progress:
-                progress("canonical", idx + 1, len(rows), "Updated landmark drift scores")
+                progress("canonical", idx + 1, len(valid_rows), "Updated landmark drift scores")
 
     render_average_face(canonical_path, config.data_dir / "cache" / f"avg_face_project_{project_id}.png")
     render_heatmap(canonical_path, aligned_shapes, config.data_dir / "cache" / f"heatmap_project_{project_id}.png")

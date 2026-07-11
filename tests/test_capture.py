@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from PIL import Image
 from fastapi.testclient import TestClient
 
 from selfietl.config import load_config
+from selfietl.jobs.runner import CancellationRequested, runner
 from selfietl.pipeline.detect import DetectionResult
 from selfietl.pipeline.single import (
     _mark_other_active_captures_for_day,
@@ -95,6 +97,34 @@ def test_capture_preview_reads_photo_metadata(tmp_path: Path):
     assert item["camera_model"] == "BackfillCam"
     assert item["width"] == 320
     assert item["height"] == 320
+
+
+def test_batch_capture_preserves_cancellation_status(tmp_path: Path, monkeypatch):
+    config = load_config(tmp_path / "home")
+    app = create_app(config)
+    contents = _make_jpeg(tmp_path)
+    runner.jobs.clear()
+    runner.resume_new_jobs()
+
+    def cancel_processing(*args, **kwargs):
+        raise CancellationRequested("Job cancelled")
+
+    monkeypatch.setattr("selfietl.api.capture.process_single_photo", cancel_processing)
+
+    with TestClient(app) as client:
+        started = client.post(
+            "/api/capture/batch",
+            files=[("files", ("selfie.jpg", contents, "image/jpeg"))],
+        )
+        assert started.status_code == 200
+        job_id = started.json()["job_id"]
+        for _ in range(100):
+            status = client.get(f"/api/jobs/{job_id}").json()
+            if status["status"] not in {"queued", "running"}:
+                break
+            time.sleep(0.01)
+
+    assert status["status"] == "cancelled"
 
 
 def test_process_single_photo_uses_manual_captured_at_override(tmp_path: Path, monkeypatch):
@@ -364,3 +394,14 @@ def test_discard_photo_returns_false_when_missing(tmp_path: Path):
 
     db = Database(config.db_path)
     assert discard_photo(db, config, "missing-hash") is False
+
+
+def test_calendar_rejects_invalid_or_reversed_date_ranges(tmp_path: Path):
+    app = create_app(load_config(tmp_path / "home"))
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        invalid = client.get("/api/calendar?start=not-a-date")
+        reversed_range = client.get("/api/calendar?start=2026-05-10&end=2026-05-01")
+
+    assert invalid.status_code == 400
+    assert reversed_range.status_code == 400

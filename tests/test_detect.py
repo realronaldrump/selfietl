@@ -76,3 +76,48 @@ def test_detect_landmarks_keeps_injected_detector_open(tmp_path, monkeypatch):
 
     assert result.landmarks is not None
     assert injected_face_mesh.closed is False
+
+
+def test_detect_project_falls_back_when_mediapipe_cannot_initialize(tmp_path, monkeypatch):
+    from selfietl.db import Database
+
+    config = load_config(tmp_path / "home")
+    db = Database(config.db_path)
+    project_id = db.execute(
+        "INSERT INTO projects (name, source_folder, created_at) VALUES (?, ?, ?)",
+        ("p", str(tmp_path), "2026-05-08 09:00:00"),
+    )
+    db.execute(
+        "INSERT INTO photos (hash, path, captured_at) VALUES (?, ?, ?)",
+        ("hash", str(tmp_path / "photo.jpg"), "2026-05-08 10:00:00"),
+    )
+    db.execute(
+        "INSERT INTO project_photos (project_id, photo_hash) VALUES (?, ?)",
+        (project_id, "hash"),
+    )
+
+    def unavailable(_config):
+        raise RuntimeError("MediaPipe unavailable")
+
+    monkeypatch.setattr(detect_pipeline, "_create_mediapipe_face_mesh", unavailable)
+    monkeypatch.setattr(
+        detect_pipeline,
+        "detect_landmarks",
+        lambda *args, **kwargs: DetectionResult(
+            landmarks=None,
+            bbox=None,
+            confidence=0,
+            yaw=None,
+            pitch=None,
+            roll=None,
+            eye_open_ratio=None,
+            mouth_open_ratio=None,
+            warnings=["no_face_detected"],
+            method="opencv",
+        ),
+    )
+
+    result = detect_pipeline.detect_project(db, config, project_id)
+
+    assert result["skipped"] == 1
+    assert db.fetchone("SELECT skip_reason FROM photos WHERE hash = ?", ("hash",))["skip_reason"] == "no_face_detected"

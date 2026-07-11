@@ -3,8 +3,13 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
+
+
+sqlite3.register_adapter(datetime, lambda value: value.isoformat(sep=" "))
+sqlite3.register_converter("timestamp", lambda value: datetime.fromisoformat(value.decode("utf-8")))
 
 
 SCHEMA = """

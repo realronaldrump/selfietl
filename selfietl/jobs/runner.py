@@ -7,7 +7,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Coroutine
+from typing import Any, Callable
 
 
 class CancellationRequested(RuntimeError):
