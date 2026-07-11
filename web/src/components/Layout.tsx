@@ -88,7 +88,7 @@ export function Layout({
               <PlaySquare className="h-5 w-5 text-coral" />
               SelfieTL
             </div>
-            <div className="mt-1 text-xs font-semibold text-paper/45">Local face-anchored timelapse</div>
+            <div className="mt-1 text-xs font-semibold text-paper/45">Local face-anchored timelapse!</div>
           </div>
           {currentProject ? <Badge tone="good">{currentProject.active_count} included</Badge> : null}
         </div>
