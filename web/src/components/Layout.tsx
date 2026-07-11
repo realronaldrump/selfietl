@@ -13,6 +13,7 @@ import {
   Images,
   PlaySquare,
   ScanFace,
+  ScanLine,
   Settings2,
   Smartphone,
   Sparkles,
@@ -27,6 +28,7 @@ export type PageKey =
   | "today"
   | "capture"
   | "timeline"
+  | "shape"
   | "video"
   | "settings"
   | "setup"
@@ -41,6 +43,7 @@ const navItems: Array<{ key: PageKey; label: string; icon: typeof FolderOpen; se
   { key: "today", label: "Today", icon: Home, section: "daily" },
   { key: "capture", label: "Capture", icon: Camera, section: "daily" },
   { key: "timeline", label: "Timeline", icon: CalendarDays, section: "daily" },
+  { key: "shape", label: "Shape", icon: ScanLine, section: "daily" },
   { key: "video", label: "Video", icon: Film, section: "daily" },
   { key: "settings", label: "Auto-render", icon: Sparkles, section: "daily" },
   { key: "setup", label: "Setup", icon: FolderOpen, section: "admin" },
@@ -233,6 +236,7 @@ function plainJobName(name: string, stage: string | null) {
     scan: "Reading your photo folder",
     detect: "Finding and measuring faces",
     canonical: "Choosing the steady face anchor",
+    face_shape: "Measuring face-shape history",
     align: "Locking each face into place",
     render: "Creating the video",
     prepare_video: "Preparing video frames",

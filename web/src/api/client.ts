@@ -232,6 +232,106 @@ export type AutoRenderUpdate = {
   render_config?: Record<string, unknown>;
 };
 
+export type FaceShapeStatus = "ready" | "stale" | "not_ready" | "insufficient";
+
+export type FaceShapePoint = {
+  date: string;
+  raw_index?: number | null;
+  trend_index: number | null;
+  lower: number | null;
+  upper: number | null;
+  uncertainty?: number | null;
+  confidence?: "high" | "medium" | "low";
+  sample_count?: number;
+  window_start?: string;
+  window_end?: string;
+  is_break?: boolean;
+  capture_profile?: string;
+  representative?: {
+    hash: string;
+    thumb_url: string;
+    image_url: string;
+    aligned_url: string;
+  };
+};
+
+export type FaceShapeTrend = {
+  status: FaceShapeStatus;
+  analysis_version: string;
+  analysis_revision?: string;
+  generated_at?: string;
+  metric: {
+    unit: string;
+    baseline_value: number;
+    higher_means: string;
+    disclaimer: string;
+  };
+  baseline?: {
+    start: string;
+    end: string;
+    observation_count: number;
+    frozen: boolean;
+  };
+  calibration?: {
+    status: "automatic" | "calibrated";
+    lighter?: { start: string; end: string; used: number };
+    fuller?: { start: string; end: string; used: number };
+    separation?: number;
+  };
+  summary?: {
+    latest_date: string | null;
+    latest_index: number | null;
+    change_90d: number | null;
+    direction_90d: "fuller" | "leaner" | "steady" | "unknown";
+    confidence: "high" | "medium" | "low" | "unavailable";
+  };
+  coverage: {
+    eligible_photos?: number;
+    eligible_days?: number;
+    excluded_photos?: number;
+    first_date?: string | null;
+    last_date?: string | null;
+    landmark_photos?: number;
+    measured_photos?: number;
+    required?: number;
+  };
+  points: FaceShapePoint[];
+  events: Array<{ date: string; type: "archive_gap" | "capture_profile_change"; label: string }>;
+};
+
+export type FaceShapePeriod = { start: string; end: string };
+
+export type FaceShapeComparePeriod = {
+  start: string;
+  end: string;
+  index: number;
+  uncertainty: number;
+  count: number;
+  distinct_days: number;
+  confidence: "high" | "medium" | "low";
+  capture_profiles: string[];
+  contour: Array<[number, number]>;
+  representative: {
+    hash: string;
+    captured_at: string;
+    thumb_url: string;
+    image_url: string;
+    aligned_url: string;
+  };
+};
+
+export type FaceShapeComparison = {
+  a: FaceShapeComparePeriod;
+  b: FaceShapeComparePeriod;
+  delta: number;
+  uncertainty: number;
+  conclusion: "fuller" | "leaner" | "no_clear_change";
+  confidence: "high" | "medium" | "low";
+  same_capture_profile: boolean;
+  contributions: Array<{ region: string; feature: string; delta: number }>;
+  disclaimer: string;
+};
+
 const SELFIE_TL_BASE_PATH = "/selfietl";
 
 function apiBasePath(): string {
@@ -283,6 +383,13 @@ export const api = {
   scan: (projectId: number) => fetchJson<JobStart>(`/api/projects/${projectId}/scan`, { method: "POST" }),
   detect: (projectId: number) => fetchJson<JobStart>(`/api/projects/${projectId}/detect`, { method: "POST" }),
   recompute: (projectId: number) => fetchJson<JobStart>(`/api/projects/${projectId}/recompute`, { method: "POST" }),
+  faceShape: (projectId: number) => fetchJson<FaceShapeTrend>(`/api/projects/${projectId}/face-shape`),
+  recomputeFaceShape: (projectId: number, rebuildBaseline = false) =>
+    fetchJson<JobStart>(`/api/projects/${projectId}/face-shape/recompute?rebuild_baseline=${rebuildBaseline}`, { method: "POST" }),
+  updateFaceShapeProfile: (projectId: number, payload: { lighter?: FaceShapePeriod | null; fuller?: FaceShapePeriod | null }) =>
+    fetchJson(`/api/projects/${projectId}/face-shape/profile`, { method: "PUT", body: JSON.stringify(payload) }),
+  compareFaceShape: (projectId: number, payload: { a: FaceShapePeriod; b: FaceShapePeriod }) =>
+    fetchJson<FaceShapeComparison>(`/api/projects/${projectId}/face-shape/compare`, { method: "POST", body: JSON.stringify(payload) }),
   photos: (projectId: number, params: { offset?: number; limit?: number; skipped?: boolean | null } = {}) => {
     const query = new URLSearchParams();
     query.set("limit", String(params.limit ?? 80));

@@ -196,3 +196,18 @@ class AutoRenderResponse(BaseModel):
     project_id: int | None = None
     has_pending_changes: bool = False
     scheduler_running: bool = False
+
+
+class FaceShapePeriod(BaseModel):
+    start: str
+    end: str
+
+
+class FaceShapeProfileUpdate(BaseModel):
+    lighter: FaceShapePeriod | None = None
+    fuller: FaceShapePeriod | None = None
+
+
+class FaceShapeCompareRequest(BaseModel):
+    a: FaceShapePeriod
+    b: FaceShapePeriod

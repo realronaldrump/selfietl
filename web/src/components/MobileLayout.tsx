@@ -1,4 +1,4 @@
-import { CalendarDays, Camera, Film, Home, MoreHorizontal } from "lucide-react";
+import { Activity, Camera, Film, Home, MoreHorizontal } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type JobStatus } from "@/api/client";
 import { Button, ProgressBar, cn } from "@/components/ui";
@@ -39,8 +39,8 @@ export function MobileLayout({
           <TabButton active={isTabActive(active, "today")} icon={<Home className="h-5 w-5" />} label="Today" onClick={() => onChange("today")} />
           <TabButton
             active={isTabActive(active, "timeline")}
-            icon={<CalendarDays className="h-5 w-5" />}
-            label="Timeline"
+            icon={<Activity className="h-5 w-5" />}
+            label="Progress"
             onClick={() => onChange("timeline")}
           />
           <CaptureTabButton active={active === "capture"} onClick={() => onChange("capture")} />
@@ -166,6 +166,7 @@ function humanJob(name: string, stage: string | null) {
     capture: "Saving today's selfie",
     detect: "Finding your face",
     canonical: "Updating face anchor",
+    face_shape: "Measuring face-shape history",
     align: "Aligning frames",
     render: "Rendering video",
     render_frames: "Rendering video",

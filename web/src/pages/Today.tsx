@@ -9,12 +9,13 @@ import {
   Flame,
   Play,
   RefreshCw,
+  ScanFace,
   Sparkles,
 } from "lucide-react";
 import { api, apiUrl, renderPlaybackUrl, renderPosterUrl, type TodayResponse } from "@/api/client";
 import { Badge, Button, PageFrame, Panel, cn } from "@/components/ui";
 
-export type TodayPageAction = "capture" | "video" | "timeline" | "settings" | "review";
+export type TodayPageAction = "capture" | "video" | "timeline" | "shape" | "settings" | "review";
 
 export function Today({ onAction }: { onAction: (action: TodayPageAction) => void }) {
   const todayQuery = useQuery({
@@ -25,6 +26,12 @@ export function Today({ onAction }: { onAction: (action: TodayPageAction) => voi
   const autoQuery = useQuery({ queryKey: ["auto-render"], queryFn: api.autoRender, refetchInterval: 60_000 });
   const today = todayQuery.data;
   const auto = autoQuery.data;
+  const faceShapeQuery = useQuery({
+    queryKey: ["face-shape", today?.project?.id],
+    queryFn: () => api.faceShape(today!.project!.id),
+    enabled: Boolean(today?.project?.id),
+    staleTime: 30_000,
+  });
 
   const greeting = useMemo(() => greetingForNow(), []);
   const todayLabel = useMemo(() => formatLongDate(new Date()), []);
@@ -128,6 +135,27 @@ export function Today({ onAction }: { onAction: (action: TodayPageAction) => voi
         <StreakStat icon={<Sparkles className="h-4 w-4 text-amber" />} label="Best" value={longest} suffix={longest === 1 ? "day" : "days"} />
         <StreakStat icon={<CalendarDays className="h-4 w-4 text-teal" />} label="Total" value={dayCount} suffix={dayCount === 1 ? "day" : "days"} />
       </div>
+
+      {faceShapeQuery.data?.summary?.latest_index != null ? (
+        <button
+          type="button"
+          onClick={() => onAction("shape")}
+          className="group w-full overflow-hidden rounded-lg border border-ink/10 bg-ink text-left text-paper shadow-line transition hover:-translate-y-0.5"
+        >
+          <div className="grid grid-cols-[1fr_auto] items-center gap-4 p-4">
+            <div>
+              <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.14em] text-paper/55">
+                <ScanFace className="h-4 w-4 text-teal" />
+                Face change
+              </div>
+              <div className="mt-2 text-lg font-black">{todayShapeSentence(faceShapeQuery.data.summary.direction_90d)}</div>
+              <div className="mt-1 text-xs font-semibold text-paper/55">90-day change {formatShapeIndex(faceShapeQuery.data.summary.change_90d)} · {faceShapeQuery.data.summary.confidence} reliability</div>
+            </div>
+            <div className="font-mono text-4xl font-black tracking-[-0.08em] text-paper">{formatShapeIndex(faceShapeQuery.data.summary.latest_index)}</div>
+          </div>
+          <div className="h-1.5 bg-[linear-gradient(90deg,#1F7A75_0%,#E7E0CF_50%,#C94F31_100%)]" />
+        </button>
+      ) : null}
 
       <Panel className="overflow-hidden p-0">
         <div className="flex items-center justify-between gap-3 border-b border-ink/10 px-4 py-3">
@@ -346,4 +374,16 @@ function humanSkipReason(reason: string | null) {
     replaced_by_newer_capture: "A newer take replaced this one",
   };
   return labels[reason] ?? "Needs review";
+}
+
+function formatShapeIndex(value: number | null) {
+  if (value == null) return "—";
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)}`;
+}
+
+function todayShapeSentence(direction: "fuller" | "leaner" | "steady" | "unknown") {
+  if (direction === "fuller") return "Recently trending fuller-like";
+  if (direction === "leaner") return "Recently trending leaner-like";
+  if (direction === "steady") return "No clear recent shape change";
+  return "Your personal trend is forming";
 }

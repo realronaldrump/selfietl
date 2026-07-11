@@ -19,6 +19,8 @@ const Render = lazy(() => import("@/pages/Render").then((m) => ({ default: m.Ren
 const Setup = lazy(() => import("@/pages/Setup").then((m) => ({ default: m.Setup })));
 const Stats = lazy(() => import("@/pages/Stats").then((m) => ({ default: m.Stats })));
 const Timeline = lazy(() => import("@/pages/Timeline").then((m) => ({ default: m.Timeline })));
+const Progress = lazy(() => import("@/pages/Progress").then((m) => ({ default: m.Progress })));
+const FaceChange = lazy(() => import("@/pages/FaceChange").then((m) => ({ default: m.FaceChange })));
 const Today = lazy(() => import("@/pages/Today").then((m) => ({ default: m.Today })));
 const Video = lazy(() => import("@/pages/Video").then((m) => ({ default: m.Video })));
 
@@ -68,6 +70,7 @@ function MobileApp({ onSwitchToDesktop }: { onSwitchToDesktop: () => void }) {
     if (action === "capture") return setPage("capture");
     if (action === "video") return setPage("video");
     if (action === "timeline") return setPage("timeline");
+    if (action === "shape") return setPage("timeline");
     if (action === "settings") return setPage("settings");
     if (action === "review") return setPage("review");
   }
@@ -82,7 +85,7 @@ function MobileApp({ onSwitchToDesktop }: { onSwitchToDesktop: () => void }) {
       case "today":
         return <Today onAction={handleTodayAction} />;
       case "timeline":
-        return <Timeline />;
+        return <Progress />;
       case "video":
         return <Video onSettings={() => setPage("settings")} />;
       case "more":
@@ -221,6 +224,7 @@ function DesktopApp({ onSwitchToMobile }: { onSwitchToMobile: () => void }) {
             if (action === "capture") setPage("capture" as PageKey);
             else if (action === "video") setPage("video" as PageKey);
             else if (action === "timeline") setPage("timeline" as PageKey);
+            else if (action === "shape") setPage("shape");
             else if (action === "settings") setPage("settings" as PageKey);
             else if (action === "review") setPage("outliers");
           }}
@@ -229,6 +233,7 @@ function DesktopApp({ onSwitchToMobile }: { onSwitchToMobile: () => void }) {
     }
     if (page === ("capture" as PageKey)) return <Capture onBack={() => setPage("today")} onDone={() => setPage("today")} />;
     if (page === ("timeline" as PageKey)) return <Timeline />;
+    if (page === "shape") return currentProject ? <FaceChange project={currentProject} /> : <EmptyProject onSetup={() => setPage("setup")} />;
     if (page === ("video" as PageKey)) return <Video onSettings={() => setPage("settings" as PageKey)} />;
     if (page === ("settings" as PageKey)) return <AutoRenderSettings onBack={() => setPage("video" as PageKey)} />;
     if (page === "setup") {
@@ -262,5 +267,6 @@ function initialPageFromUrl(fallback: MobilePage): MobilePage {
   if (action === "capture") return "capture";
   if (action === "video") return "video";
   if (action === "timeline") return "timeline";
+  if (action === "shape") return "timeline";
   return fallback;
 }

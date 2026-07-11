@@ -12,6 +12,7 @@ import numpy as np
 from selfietl.config import AppConfig
 from selfietl.db import Database
 from selfietl.pipeline.images import open_oriented_image
+from selfietl.pipeline.face_shape import measure_photo
 from selfietl.pipeline.score import compute_quality_score
 
 Progress = Callable[[str, int, int, str], None]
@@ -132,6 +133,7 @@ def detect_project(
                         photo_hash,
                     ),
                 )
+                measure_photo(db, photo_hash)
                 detected += 1
                 if result.warnings:
                     warnings.append({"hash": photo_hash, "warnings": result.warnings})

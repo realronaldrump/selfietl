@@ -13,6 +13,7 @@ from selfietl.db import Database
 from selfietl.pipeline.align import align_photo, aligned_path
 from selfietl.pipeline.canonical import canonical_pixels
 from selfietl.pipeline.detect import detect_landmarks
+from selfietl.pipeline.face_shape import measure_photo
 from selfietl.pipeline.images import (
     exif_metadata,
     file_size,
@@ -241,6 +242,8 @@ def process_single_photo(
                 keep_hash=photo_hash,
                 captured_at=meta["captured_at"],
             )
+
+    measure_photo(db, photo_hash)
 
     aligned = False
     project_row = db.fetchone(

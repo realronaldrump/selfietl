@@ -68,6 +68,29 @@ CREATE TABLE IF NOT EXISTS renders (
     error TEXT
 );
 
+CREATE TABLE IF NOT EXISTS face_shape_measurements (
+    photo_hash TEXT PRIMARY KEY REFERENCES photos(hash) ON DELETE CASCADE,
+    algorithm_version TEXT NOT NULL,
+    source_signature TEXT NOT NULL,
+    metrics_json TEXT NOT NULL,
+    contour_json TEXT,
+    eligible BOOLEAN NOT NULL DEFAULT 0,
+    reasons_json TEXT NOT NULL DEFAULT '[]',
+    capture_profile TEXT NOT NULL,
+    computed_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS face_shape_profiles (
+    project_id INT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    algorithm_version TEXT NOT NULL,
+    baseline_json TEXT NOT NULL,
+    correction_json TEXT NOT NULL,
+    calibration_json TEXT,
+    source_revision TEXT NOT NULL,
+    computed_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_photos_captured ON photos(captured_at);
 CREATE INDEX IF NOT EXISTS idx_photos_skipped ON photos(skipped);
 CREATE INDEX IF NOT EXISTS idx_photos_perceptual_hash ON photos(perceptual_hash);
@@ -75,6 +98,8 @@ CREATE INDEX IF NOT EXISTS idx_project_photos_project ON project_photos(project_
 CREATE INDEX IF NOT EXISTS idx_project_photos_hash ON project_photos(photo_hash);
 CREATE INDEX IF NOT EXISTS idx_renders_project ON renders(project_id);
 CREATE INDEX IF NOT EXISTS idx_renders_project_status ON renders(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_face_shape_measurements_version ON face_shape_measurements(algorithm_version);
+CREATE INDEX IF NOT EXISTS idx_face_shape_measurements_profile ON face_shape_measurements(capture_profile);
 """
 
 
