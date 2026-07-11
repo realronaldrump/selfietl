@@ -211,3 +211,24 @@ class FaceShapeProfileUpdate(BaseModel):
 class FaceShapeCompareRequest(BaseModel):
     a: FaceShapePeriod
     b: FaceShapePeriod
+
+
+class HairFrameUpdate(BaseModel):
+    excluded: bool
+
+
+class HaircutCreateRequest(BaseModel):
+    event_date: str
+
+
+class HaircutUpdateRequest(BaseModel):
+    event_date: str | None = None
+    status: Literal["provisional", "suggested", "confirmed", "dismissed"] | None = None
+
+
+class HairExportRequest(BaseModel):
+    start_date: str | None = None
+    end_date: str | None = None
+    seconds_per_selfie: float = Field(default=1.0, ge=0.25, le=4.0)
+    width: int = Field(default=1080, ge=360, le=2160)
+    height: int = Field(default=1350, ge=450, le=2700)

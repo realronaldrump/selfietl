@@ -138,7 +138,7 @@ def reset_app_data(config: AppConfig, db: Database) -> None:
         conn.execute("DELETE FROM photos")
         conn.execute("DELETE FROM projects")
         try:
-            conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('projects', 'renders')")
+            conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('projects', 'renders', 'haircut_events', 'hair_exports')")
         except Exception:
             pass
 

@@ -55,6 +55,10 @@ By default, local data lives under `~/.selfietl`:
   cache/
     landmarks/
     aligned_landmarks/
+    hair/
+      source/
+      aligned/
+      composites/
     thumbs/
     renders/
   aligned/
@@ -62,3 +66,5 @@ By default, local data lives under `~/.selfietl`:
 ```
 
 Set `SELFIE_TL_HOME=/path/to/data` to use another data directory.
+
+The **Progress → Hair** view uses a local MediaPipe hair-segmentation model to build a fixed-face, black-and-white daily silhouette animation. The model downloads once on first use; source photos and generated masks remain on the SelfieTL machine.

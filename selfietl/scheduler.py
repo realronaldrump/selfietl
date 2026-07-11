@@ -20,6 +20,7 @@ from selfietl.jobs.runner import CancellationRequested, runner
 from selfietl.pipeline.align import align_project
 from selfietl.pipeline.canonical import compute_canonical_face
 from selfietl.pipeline.compose import _active_rows, create_render_row, mark_render_failed, render_project
+from selfietl.pipeline.hair import create_hair_export, refresh_project_hair_alignment, render_hair_export
 
 DEFAULT_RENDER_TIME = "03:00"
 AUTO_RENDER_RETRY_DELAY = timedelta(minutes=60)
@@ -289,7 +290,38 @@ def kick_off_auto_render(
                 force=True,
                 cancel_check=cancel_check,
             )
+            if db.fetchone(
+                "SELECT 1 FROM hair_measurements m JOIN project_photos pp ON pp.photo_hash = m.photo_hash WHERE pp.project_id = ? LIMIT 1",
+                (project_id,),
+            ):
+                refresh_project_hair_alignment(
+                    db,
+                    config,
+                    project_id,
+                    progress=progress,
+                    cancel_check=cancel_check,
+                )
             result = render_project(db, config, project_id, render_config, render_id, progress, cancel_check)
+            latest_hair = db.fetchone(
+                "SELECT config_json FROM hair_exports WHERE project_id = ? AND status = 'done' ORDER BY id DESC LIMIT 1",
+                (project_id,),
+            )
+            if latest_hair:
+                try:
+                    hair_config = json.loads(latest_hair["config_json"])
+                    hair_export_id = create_hair_export(db, config, project_id, hair_config)
+                    render_hair_export(
+                        db,
+                        config,
+                        project_id,
+                        hair_export_id,
+                        hair_config,
+                        progress=progress,
+                        cancel_check=cancel_check,
+                    )
+                except Exception as exc:
+                    # Hair is additive; a failed silhouette export must not fail the primary timelapse.
+                    logger.warning("Nightly hair export failed: %s", exc)
             _record_auto_render_success(config, render_id, run_date, input_signature)
             return result
         except CancellationRequested as exc:

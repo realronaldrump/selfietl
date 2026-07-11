@@ -179,6 +179,9 @@ def _remove_cached_photo(config: AppConfig, photo_hash: str) -> None:
         config.thumbs_dir / f"{photo_hash}.jpg",
         config.landmarks_dir / f"{photo_hash}.npz",
         config.aligned_landmarks_dir / f"{photo_hash}.npz",
+        config.hair_source_masks_dir / f"{photo_hash}.npz",
+        config.hair_aligned_masks_dir / f"{photo_hash}.png",
+        config.hair_composites_dir / f"{photo_hash}.png",
         config.aligned_dir / f"{photo_hash}.jpg",
         config.aligned_dir / f"{photo_hash}.png",
     ]

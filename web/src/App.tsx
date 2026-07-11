@@ -21,6 +21,7 @@ const Stats = lazy(() => import("@/pages/Stats").then((m) => ({ default: m.Stats
 const Timeline = lazy(() => import("@/pages/Timeline").then((m) => ({ default: m.Timeline })));
 const Progress = lazy(() => import("@/pages/Progress").then((m) => ({ default: m.Progress })));
 const FaceChange = lazy(() => import("@/pages/FaceChange").then((m) => ({ default: m.FaceChange })));
+const Hair = lazy(() => import("@/pages/Hair").then((m) => ({ default: m.Hair })));
 const Today = lazy(() => import("@/pages/Today").then((m) => ({ default: m.Today })));
 const Video = lazy(() => import("@/pages/Video").then((m) => ({ default: m.Video })));
 
@@ -234,6 +235,7 @@ function DesktopApp({ onSwitchToMobile }: { onSwitchToMobile: () => void }) {
     if (page === ("capture" as PageKey)) return <Capture onBack={() => setPage("today")} onDone={() => setPage("today")} />;
     if (page === ("timeline" as PageKey)) return <Timeline />;
     if (page === "shape") return currentProject ? <FaceChange project={currentProject} /> : <EmptyProject onSetup={() => setPage("setup")} />;
+    if (page === "hair") return currentProject ? <Hair project={currentProject} /> : <EmptyProject onSetup={() => setPage("setup")} />;
     if (page === ("video" as PageKey)) return <Video onSettings={() => setPage("settings" as PageKey)} />;
     if (page === ("settings" as PageKey)) return <AutoRenderSettings onBack={() => setPage("video" as PageKey)} />;
     if (page === "setup") {
@@ -268,5 +270,6 @@ function initialPageFromUrl(fallback: MobilePage): MobilePage {
   if (action === "video") return "video";
   if (action === "timeline") return "timeline";
   if (action === "shape") return "timeline";
+  if (action === "hair") return "timeline";
   return fallback;
 }

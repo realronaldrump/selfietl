@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from selfietl.api import auto_render, capture, face_shape, photos, projects, renders, system
+from selfietl.api import auto_render, capture, face_shape, hair, photos, projects, renders, system
 from selfietl.config import AppConfig, load_config
 from selfietl.db import Database
 from selfietl.scheduler import AutoRenderScheduler
@@ -48,6 +48,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(capture.router, prefix="/api")
     app.include_router(auto_render.router, prefix="/api")
     app.include_router(face_shape.router, prefix="/api")
+    app.include_router(hair.router, prefix="/api")
 
     @app.get("/api/health")
     def health():

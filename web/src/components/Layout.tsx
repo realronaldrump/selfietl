@@ -14,6 +14,7 @@ import {
   PlaySquare,
   ScanFace,
   ScanLine,
+  Scissors,
   Settings2,
   Smartphone,
   Sparkles,
@@ -29,6 +30,7 @@ export type PageKey =
   | "capture"
   | "timeline"
   | "shape"
+  | "hair"
   | "video"
   | "settings"
   | "setup"
@@ -44,6 +46,7 @@ const navItems: Array<{ key: PageKey; label: string; icon: typeof FolderOpen; se
   { key: "capture", label: "Capture", icon: Camera, section: "daily" },
   { key: "timeline", label: "Timeline", icon: CalendarDays, section: "daily" },
   { key: "shape", label: "Shape", icon: ScanLine, section: "daily" },
+  { key: "hair", label: "Hair", icon: Scissors, section: "daily" },
   { key: "video", label: "Video", icon: Film, section: "daily" },
   { key: "settings", label: "Auto-render", icon: Sparkles, section: "daily" },
   { key: "setup", label: "Setup", icon: FolderOpen, section: "admin" },
@@ -237,6 +240,9 @@ function plainJobName(name: string, stage: string | null) {
     detect: "Finding and measuring faces",
     canonical: "Choosing the steady face anchor",
     face_shape: "Measuring face-shape history",
+    hair_analysis: "Tracing hair history",
+    hair_alignment: "Anchoring hair silhouettes",
+    hair_export: "Building hair animation",
     align: "Locking each face into place",
     render: "Creating the video",
     prepare_video: "Preparing video frames",

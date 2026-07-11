@@ -91,6 +91,47 @@ CREATE TABLE IF NOT EXISTS face_shape_profiles (
     updated_at TIMESTAMP NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS hair_measurements (
+    photo_hash TEXT PRIMARY KEY REFERENCES photos(hash) ON DELETE CASCADE,
+    algorithm_version TEXT NOT NULL,
+    source_signature TEXT NOT NULL,
+    alignment_signature TEXT,
+    source_mask_path TEXT,
+    aligned_mask_path TEXT,
+    metrics_json TEXT NOT NULL DEFAULT '{}',
+    quality_score REAL NOT NULL DEFAULT 0,
+    eligible BOOLEAN NOT NULL DEFAULT 0,
+    user_excluded BOOLEAN NOT NULL DEFAULT 0,
+    reasons_json TEXT NOT NULL DEFAULT '[]',
+    computed_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS haircut_events (
+    id INTEGER PRIMARY KEY,
+    project_id INT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    event_date TEXT NOT NULL,
+    first_after_photo_hash TEXT REFERENCES photos(hash) ON DELETE SET NULL,
+    source TEXT NOT NULL CHECK(source IN ('automatic', 'manual')),
+    status TEXT NOT NULL CHECK(status IN ('provisional', 'suggested', 'confirmed', 'dismissed')),
+    score REAL,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    UNIQUE(project_id, first_after_photo_hash)
+);
+
+CREATE TABLE IF NOT EXISTS hair_exports (
+    id INTEGER PRIMARY KEY,
+    project_id INT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    analysis_revision TEXT NOT NULL,
+    config_json TEXT NOT NULL,
+    output_path TEXT,
+    started_at TIMESTAMP NOT NULL,
+    finished_at TIMESTAMP,
+    status TEXT NOT NULL,
+    error TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_photos_captured ON photos(captured_at);
 CREATE INDEX IF NOT EXISTS idx_photos_skipped ON photos(skipped);
 CREATE INDEX IF NOT EXISTS idx_photos_perceptual_hash ON photos(perceptual_hash);
@@ -100,6 +141,9 @@ CREATE INDEX IF NOT EXISTS idx_renders_project ON renders(project_id);
 CREATE INDEX IF NOT EXISTS idx_renders_project_status ON renders(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_face_shape_measurements_version ON face_shape_measurements(algorithm_version);
 CREATE INDEX IF NOT EXISTS idx_face_shape_measurements_profile ON face_shape_measurements(capture_profile);
+CREATE INDEX IF NOT EXISTS idx_hair_measurements_version ON hair_measurements(algorithm_version);
+CREATE INDEX IF NOT EXISTS idx_haircut_events_project ON haircut_events(project_id, event_date);
+CREATE INDEX IF NOT EXISTS idx_hair_exports_project ON hair_exports(project_id, started_at);
 """
 
 

@@ -135,6 +135,26 @@ class AppConfig(BaseModel):
         return self.data_dir / "cache" / "renders"
 
     @property
+    def hair_source_masks_dir(self) -> Path:
+        return self.data_dir / "cache" / "hair" / "source"
+
+    @property
+    def hair_aligned_masks_dir(self) -> Path:
+        return self.data_dir / "cache" / "hair" / "aligned"
+
+    @property
+    def hair_composites_dir(self) -> Path:
+        return self.data_dir / "cache" / "hair" / "composites"
+
+    @property
+    def hair_playback_dir(self) -> Path:
+        return self.data_dir / "cache" / "hair" / "playback"
+
+    @property
+    def models_dir(self) -> Path:
+        return self.data_dir / "cache" / "models"
+
+    @property
     def aligned_dir(self) -> Path:
         return self.data_dir / "aligned"
 
@@ -153,6 +173,11 @@ class AppConfig(BaseModel):
             self.aligned_landmarks_dir,
             self.thumbs_dir,
             self.render_cache_dir,
+            self.hair_source_masks_dir,
+            self.hair_aligned_masks_dir,
+            self.hair_composites_dir,
+            self.hair_playback_dir,
+            self.models_dir,
             self.aligned_dir,
             self.exports_dir,
             self.inbox_dir,

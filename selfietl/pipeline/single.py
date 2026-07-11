@@ -14,6 +14,7 @@ from selfietl.pipeline.align import align_photo, aligned_path
 from selfietl.pipeline.canonical import canonical_pixels
 from selfietl.pipeline.detect import detect_landmarks
 from selfietl.pipeline.face_shape import measure_photo
+from selfietl.pipeline.hair import analyze_photo_hair
 from selfietl.pipeline.images import (
     exif_metadata,
     file_size,
@@ -246,6 +247,7 @@ def process_single_photo(
     measure_photo(db, photo_hash)
 
     aligned = False
+    hair_warnings: list[str] = []
     project_row = db.fetchone(
         "SELECT canonical_landmarks_path FROM projects WHERE id = ?", (project_id,)
     )
@@ -269,8 +271,17 @@ def process_single_photo(
         )
         aligned = True
 
+    if not should_skip:
+        if progress:
+            progress("capture", 5, 6, "Tracing hair silhouette")
+        try:
+            analyze_photo_hair(db, config, photo_hash)
+        except Exception as exc:
+            # Hair is an enhancement and must never reject an otherwise good selfie.
+            hair_warnings.append(f"hair_analysis_failed:{exc.__class__.__name__}")
+
     if progress:
-        progress("capture", 5, 5, "Selfie added")
+        progress("capture", 6, 6, "Selfie added")
 
     return {
         "hash": photo_hash,
@@ -285,7 +296,7 @@ def process_single_photo(
         "pitch": detection.pitch,
         "roll": detection.roll,
         "eye_open_ratio": detection.eye_open_ratio,
-        "warnings": detection.warnings,
+        "warnings": [*detection.warnings, *hair_warnings],
         "path": str(source_path),
     }
 
@@ -306,6 +317,9 @@ def discard_photo(db: Database, config: AppConfig, photo_hash: str) -> bool:
     candidates.append(config.thumbs_dir / f"{photo_hash}.jpg")
     candidates.append(config.landmarks_dir / f"{photo_hash}.npz")
     candidates.append(config.aligned_landmarks_dir / f"{photo_hash}.npz")
+    candidates.append(config.hair_source_masks_dir / f"{photo_hash}.npz")
+    candidates.append(config.hair_aligned_masks_dir / f"{photo_hash}.png")
+    candidates.append(config.hair_composites_dir / f"{photo_hash}.png")
     for suffix in ("jpg", "png"):
         candidates.append(config.aligned_dir / f"{photo_hash}.{suffix}")
     for path in candidates:

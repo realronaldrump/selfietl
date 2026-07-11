@@ -351,6 +351,47 @@ export type FaceShapeComparison = {
   disclaimer: string;
 };
 
+export type HairFrame = {
+  hash: string;
+  date: string;
+  captured_at: string;
+  quality: number;
+  eligible: boolean;
+  excluded: boolean;
+  reasons: string[];
+  thumb_url: string;
+  source_url: string;
+  composite_url: string;
+};
+
+export type HaircutEvent = {
+  id: number;
+  event_date: string;
+  first_after_photo_hash: string | null;
+  source: "automatic" | "manual";
+  status: "suggested" | "confirmed" | "dismissed";
+  score: number | null;
+};
+
+export type HairManifest = {
+  status: "not_ready" | "insufficient" | "ready" | "stale";
+  analysis_version: string;
+  analysis_revision: string | null;
+  coverage: { available: number; included: number; excluded: number; total_photos: number };
+  face_outline: number[][];
+  frames: HairFrame[];
+  haircuts: HaircutEvent[];
+  latest_export: {
+    id: number;
+    status: string;
+    stale: boolean;
+    file_url: string;
+    playback_url: string;
+    finished_at: string | null;
+    config: { start_date?: string | null; end_date?: string | null; seconds_per_selfie?: number };
+  } | null;
+};
+
 const SELFIE_TL_BASE_PATH = "/selfietl";
 
 function apiBasePath(): string {
@@ -409,6 +450,17 @@ export const api = {
     fetchJson(`/api/projects/${projectId}/face-shape/profile`, { method: "PUT", body: JSON.stringify(payload) }),
   compareFaceShape: (projectId: number, payload: { a: FaceShapePeriod; b: FaceShapePeriod }) =>
     fetchJson<FaceShapeComparison>(`/api/projects/${projectId}/face-shape/compare`, { method: "POST", body: JSON.stringify(payload) }),
+  hair: (projectId: number) => fetchJson<HairManifest>(`/api/projects/${projectId}/hair`),
+  recomputeHair: (projectId: number) =>
+    fetchJson<JobStart>(`/api/projects/${projectId}/hair/recompute`, { method: "POST" }),
+  updateHairFrame: (hash: string, excluded: boolean) =>
+    fetchJson<{ hash: string; excluded: boolean }>(`/api/photos/${hash}/hair`, { method: "PATCH", body: JSON.stringify({ excluded }) }),
+  addHaircut: (projectId: number, eventDate: string) =>
+    fetchJson<HaircutEvent>(`/api/projects/${projectId}/haircuts`, { method: "POST", body: JSON.stringify({ event_date: eventDate }) }),
+  updateHaircut: (eventId: number, payload: { event_date?: string; status?: HaircutEvent["status"] }) =>
+    fetchJson<HaircutEvent>(`/api/haircuts/${eventId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  exportHair: (projectId: number, payload: { start_date?: string | null; end_date?: string | null; seconds_per_selfie?: number }) =>
+    fetchJson<JobStart>(`/api/projects/${projectId}/hair/export`, { method: "POST", body: JSON.stringify(payload) }),
   photos: (projectId: number, params: { offset?: number; limit?: number; skipped?: boolean | null } = {}) => {
     const query = new URLSearchParams();
     query.set("limit", String(params.limit ?? 80));
