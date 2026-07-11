@@ -241,12 +241,15 @@ export type FaceShapePoint = {
   lower: number | null;
   upper: number | null;
   uncertainty?: number | null;
+  interval_level?: number | null;
   confidence?: "high" | "medium" | "low";
   sample_count?: number;
   window_start?: string;
   window_end?: string;
   is_break?: boolean;
   capture_profile?: string;
+  segment?: number;
+  components?: Record<string, number>;
   representative?: {
     hash: string;
     thumb_url: string;
@@ -285,6 +288,22 @@ export type FaceShapeTrend = {
     direction_90d: "fuller" | "leaner" | "steady" | "unknown";
     confidence: "high" | "medium" | "low" | "unavailable";
   };
+  insights?: Array<{
+    kind: "shape" | "trend" | "variation" | "shift";
+    title: string;
+    detail: string;
+  }>;
+  statistics?: {
+    status: "ready" | "insufficient";
+    direction?: "increasing" | "decreasing" | "no_clear_trend";
+    stability?: "stable" | "typical" | "variable";
+  };
+  possible_change_point?: {
+    date: string;
+    direction: "higher" | "lower";
+    confidence: "moderate" | "strong";
+    label: string;
+  } | null;
   coverage: {
     eligible_photos?: number;
     eligible_days?: number;
@@ -328,7 +347,7 @@ export type FaceShapeComparison = {
   conclusion: "fuller" | "leaner" | "no_clear_change";
   confidence: "high" | "medium" | "low";
   same_capture_profile: boolean;
-  contributions: Array<{ region: string; feature: string; delta: number }>;
+  contributions: Array<{ region: string; feature: string; delta: number; kind?: "fullness" | "proportion"; observation?: string }>;
   disclaimer: string;
 };
 

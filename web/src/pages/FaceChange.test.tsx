@@ -22,6 +22,7 @@ const trend: FaceShapeTrend = {
   baseline: { start: "2024-01-01", end: "2024-06-01", observation_count: 12, frozen: true },
   calibration: { status: "automatic" },
   summary: { latest_date: "2024-06-01", latest_index: 0.7, change_90d: 0.5, direction_90d: "fuller", confidence: "high" },
+  insights: [{ kind: "shape", title: "Jaw looks broader relative to cheeks", detail: "This is the clearest regional change." }],
   coverage: { eligible_photos: 12, eligible_days: 12, excluded_photos: 0, first_date: "2024-01-01", last_date: "2024-06-01" },
   events: [{ date: "2024-03-01", type: "capture_profile_change", label: "Capture source changed" }],
   points: [
@@ -58,8 +59,11 @@ describe("FaceChange", () => {
     expect(await screen.findByText("Your face, changing slowly.")).toBeInTheDocument();
     expect(screen.getByText("Personal baseline · 0")).toBeInTheDocument();
     expect(screen.getByLabelText("Period A")).toHaveAttribute("type", "date");
-    expect(screen.getByLabelText("Period B")).toHaveValue("2024-06-01");
+    await waitFor(() => expect(screen.getByLabelText("Period B")).toHaveValue("2024-06-01"));
     expect(screen.getByText(/not a scale reading/i)).toBeInTheDocument();
+    expect(screen.getByText("Jaw looks broader relative to cheeks")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("How this was calculated"));
+    expect(screen.getByRole("link", { name: "Spreadsheet" })).toHaveAttribute("href", "/api/projects/1/face-shape/export?format=csv");
   });
 
   it("switches comparison evidence modes and exposes calibration inputs", async () => {

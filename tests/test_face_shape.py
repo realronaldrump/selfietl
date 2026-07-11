@@ -77,6 +77,15 @@ def test_face_shape_features_are_similarity_invariant_and_fullness_sensitive():
     fuller_features, _ = extract_features(synthetic_landmarks(1.15))
     assert fuller_features["lower_face_width"] > base_features["lower_face_width"]
     assert fuller_features["lower_face_area"] > base_features["lower_face_area"]
+    assert {
+        "jaw_cheek_ratio",
+        "outline_roundness",
+        "chin_cheek_ratio",
+        "temple_cheek_ratio",
+        "lower_face_height",
+        "jaw_angle",
+        "outline_asymmetry",
+    }.issubset(base_features)
 
 
 def test_recompute_builds_frozen_baseline_trend_and_comparison(tmp_path):
@@ -91,6 +100,10 @@ def test_recompute_builds_frozen_baseline_trend_and_comparison(tmp_path):
     assert trend["status"] == "ready"
     assert trend["coverage"]["eligible_photos"] == 12
     assert any(point.get("trend_index") is not None for point in trend["points"])
+    assert trend["statistics"]["status"] == "ready"
+    assert trend["statistics"]["direction"] == "increasing"
+    assert trend["insights"]
+    assert all("components" in point for point in trend["points"] if not point.get("is_break"))
 
     comparison = compare_periods(
         db,
@@ -130,11 +143,35 @@ def test_calibration_validates_ranges_and_api_returns_trend(tmp_path):
                 "b": {"start": "2024-03-21", "end": "2024-06-30"},
             },
         )
+        csv_export = client.get(f"/api/projects/{project_id}/face-shape/export?format=csv")
+        json_export = client.get(f"/api/projects/{project_id}/face-shape/export?format=json")
 
     assert response.status_code == 200
     assert response.json()["metric"]["baseline_value"] == 0
     assert compare.status_code == 200
     assert compare.json()["disclaimer"].startswith("Face Shape Index")
+    assert csv_export.status_code == 200
+    assert "attachment;" in csv_export.headers["content-disposition"]
+    assert "outline_asymmetry" in csv_export.text.splitlines()[0]
+    assert json_export.status_code == 200
+    assert json_export.json()["analysis"]["statistics"]["status"] == "ready"
+
+
+def test_trends_do_not_bridge_capture_profile_changes(tmp_path):
+    db, project_id = create_project_with_landmarks(tmp_path, [0.9] * 6 + [1.1] * 6)
+    db.execute(
+        "UPDATE photos SET camera_model = 'new-camera' WHERE captured_at >= ?",
+        ("2024-03-21 00:00:00",),
+    )
+
+    recompute_project(db, project_id)
+    trend = get_project_trend(db, project_id)
+
+    points = [point for point in trend["points"] if not point.get("is_break")]
+    assert {point["segment"] for point in points} == {0, 1}
+    assert any(event["type"] == "capture_profile_change" for event in trend["events"])
+    assert trend["summary"]["direction_90d"] == "steady"
+    assert trend["statistics"]["observation_days"] == 6
 
 
 def pytest_approx_dict(values: dict[str, float]):

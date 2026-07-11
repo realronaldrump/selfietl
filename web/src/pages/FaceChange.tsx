@@ -6,6 +6,7 @@ import {
   ArrowLeftRight,
   Check,
   CircleGauge,
+  Download,
   GitCompareArrows,
   Info,
   ScanFace,
@@ -145,7 +146,7 @@ export function FaceChange({ project }: { project?: Project | null }) {
               <Activity className="h-4 w-4 text-teal" />
               <h2 className="font-black text-ink">Face-shape trend</h2>
             </div>
-            <p className="mt-1 text-sm font-semibold text-ink/55">Faint dots are selfie days. The dark line is the local median.</p>
+            <p className="mt-1 text-sm font-semibold text-ink/55">Faint dots are selfie days. The dark line shows the sustained pattern; shading shows its likely range.</p>
           </div>
           <div className="grid grid-cols-3 rounded-md border border-ink/10 bg-bone p-1">
             {(["6m", "1y", "all"] as Range[]).map((item) => (
@@ -209,11 +210,13 @@ export function FaceChange({ project }: { project?: Project | null }) {
 
       {trend.events.length ? <EventStrip events={trend.events} /> : null}
 
+      {trend.insights?.length ? <InsightsPanel insights={trend.insights} /> : null}
+
       <CompareStage comparison={compareQuery.data} loading={compareQuery.isLoading} error={compareQuery.error?.message} />
 
       <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
         <CalibrationPanel projectId={activeProject.id} trend={trend} />
-        <MethodPanel trend={trend} />
+        <MethodPanel projectId={activeProject.id} trend={trend} />
       </div>
     </PageFrame>
   );
@@ -265,9 +268,9 @@ function CompareStage({ comparison, loading, error }: { comparison?: FaceShapeCo
               ) : null}
               <div className="mt-5 space-y-2">
                 {comparison.contributions.slice(0, 3).map((item) => (
-                  <div key={item.feature} className="flex items-center justify-between gap-3 border-b border-ink/8 pb-2 text-sm">
+                  <div key={item.feature} className="border-b border-ink/8 pb-2 text-sm">
                     <span className="font-semibold text-ink/60">{capitalize(item.region)}</span>
-                    <span className="font-mono font-black text-ink">{formatSigned(item.delta)}</span>
+                    <span className="mt-0.5 block font-black text-ink">{item.observation ?? "Looks different"}</span>
                   </div>
                 ))}
               </div>
@@ -353,7 +356,23 @@ function CalibrationPanel({ projectId, trend }: { projectId: number; trend: Face
   );
 }
 
-function MethodPanel({ trend }: { trend: FaceShapeTrend }) {
+function InsightsPanel({ insights }: { insights: NonNullable<FaceShapeTrend["insights"]> }) {
+  return (
+    <Panel>
+      <div className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-amber" /><h2 className="font-black text-ink">What stands out</h2></div>
+      <div className="mt-3 grid gap-2 md:grid-cols-3">
+        {insights.map((insight) => (
+          <div key={`${insight.kind}-${insight.title}`} className="rounded-md border border-ink/10 bg-bone p-3">
+            <h3 className="text-sm font-black text-ink">{insight.title}</h3>
+            <p className="mt-1 text-sm font-semibold leading-5 text-ink/55">{insight.detail}</p>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function MethodPanel({ projectId, trend }: { projectId: number; trend: FaceShapeTrend }) {
   return (
     <Panel>
       <details>
@@ -362,13 +381,21 @@ function MethodPanel({ trend }: { trend: FaceShapeTrend }) {
           <CircleGauge className="h-4 w-4 text-ink/35" />
         </summary>
         <div className="mt-3 space-y-3 text-sm font-semibold leading-6 text-ink/60">
-          <p>Eye and nose landmarks steady each frame. Cheek, jaw, lower-face area, and outline ratios are combined after reducing pose and expression effects.</p>
+          <p>Stable eye landmarks align each frame. Multiple cheek, temple, jaw, chin, length, roundness, and symmetry measurements are combined after reducing pose, expression, camera, and low-quality-frame effects.</p>
+          <p>Selfie bursts count as one day. The sustained pattern uses nearby days and favors clearer, straighter photos; the shaded range reflects uncertainty.</p>
           <p>The baseline is frozen across {trend.baseline?.observation_count ?? 0} eligible selfies from {formatDateRange(trend.baseline?.start, trend.baseline?.end)}.</p>
           <div className="grid grid-cols-2 gap-2 text-xs">
             <EvidenceStat label="Used" value={trend.coverage.eligible_photos ?? 0} />
             <EvidenceStat label="Excluded" value={trend.coverage.excluded_photos ?? 0} />
           </div>
           <p className="rounded-md bg-amber/10 p-3 text-xs leading-5 text-ink/65">Hydration, aging, facial hair, medication, lighting, and camera perspective can also change appearance. Treat this as supporting visual evidence, not a diagnosis.</p>
+          <div className="border-t border-ink/10 pt-3">
+            <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.12em] text-ink/45"><Download className="h-4 w-4" />Export</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <a href={apiUrl(`/api/projects/${projectId}/face-shape/export?format=csv`)} download className="inline-flex min-h-11 items-center rounded-md bg-ink px-3 text-sm font-bold text-paper hover:bg-graphite">Spreadsheet</a>
+              <a href={apiUrl(`/api/projects/${projectId}/face-shape/export?format=json`)} download className="inline-flex min-h-11 items-center rounded-md bg-bone px-3 text-sm font-bold text-ink hover:bg-ink/10">Full analysis</a>
+            </div>
+          </div>
         </div>
       </details>
     </Panel>

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from selfietl.api.deps import get_db
 from selfietl.db import Database
@@ -8,6 +10,7 @@ from selfietl.jobs.runner import JobsPaused, runner
 from selfietl.models import FaceShapeCompareRequest, FaceShapeProfileUpdate, StartJobResponse
 from selfietl.pipeline.face_shape import (
     compare_periods,
+    export_project_analysis,
     get_project_trend,
     recompute_project,
     update_calibration,
@@ -44,6 +47,24 @@ def compare(project_id: int, payload: FaceShapeCompareRequest, db: Database = De
         return compare_periods(db, project_id, payload.a.model_dump(), payload.b.model_dump())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{project_id}/face-shape/export")
+def export(
+    project_id: int,
+    format: Literal["csv", "json"] = Query("csv"),
+    db: Database = Depends(get_db),
+):
+    _ensure_project(db, project_id)
+    try:
+        content, media_type, filename = export_project_analysis(db, project_id, format)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/{project_id}/face-shape/recompute", response_model=StartJobResponse)
