@@ -56,6 +56,16 @@ textarea {
   accent-color: #1f7a75;
 }
 
+/*
+ * iOS WebKit 26 adds temporal inputs' inline padding outside width: 100%,
+ * making padded date/time controls overrun their containers. Fill the
+ * available inline space instead; compact `w-auto` controls stay untouched.
+ * https://bugs.webkit.org/show_bug.cgi?id=301648
+ */
+input.w-full:is([type="date"], [type="time"], [type="datetime-local"], [type="month"], [type="week"]) {
+  width: -webkit-fill-available;
+}
+
 img {
   -webkit-user-drag: none;
 }
