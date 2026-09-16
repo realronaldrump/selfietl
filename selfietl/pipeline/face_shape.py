@@ -12,11 +12,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
+from scipy.stats import t as student_t
 
 from selfietl.db import Database
 
 
-ALGORITHM_VERSION = "face-shape-v2"
+ALGORITHM_VERSION = "face-shape-v3"
 FULLNESS_FEATURE_NAMES = (
     "face_width_height",
     "jaw_cheek_ratio",
@@ -34,11 +35,11 @@ INSIGHT_FEATURE_NAMES = (
 FEATURE_NAMES = FULLNESS_FEATURE_NAMES + INSIGHT_FEATURE_NAMES
 FULLNESS_INDICES = np.array([FEATURE_NAMES.index(name) for name in FULLNESS_FEATURE_NAMES])
 FEATURE_LABELS = {
-    "face_width_height": "overall width",
+    "face_width_height": "cheek width relative to eye-to-chin length",
     "jaw_cheek_ratio": "jaw breadth",
     "lower_face_width": "lower-cheek width",
     "lower_face_area": "lower-face area",
-    "outline_roundness": "outline roundness",
+    "outline_roundness": "lower-face roundness",
     "chin_cheek_ratio": "chin breadth",
     "temple_cheek_ratio": "temple-to-cheek balance",
     "lower_face_height": "lower-face length",
@@ -94,11 +95,15 @@ def measure_photo(db: Database, photo_hash: str) -> dict[str, Any]:
         try:
             with np.load(landmark_path) as payload:
                 landmarks = np.asarray(payload["landmarks"], dtype=np.float64)
-            metrics, contour_array = extract_features(landmarks)
+                image_size = np.asarray(payload["image_size"] if "image_size" in payload else [row["width"], row["height"]], dtype=float)
+            metrics, contour_array = extract_features(landmarks, image_size=image_size)
             contour = np.round(contour_array, 6).tolist()
         except Exception as exc:
             reasons.append(f"invalid_landmarks:{exc.__class__.__name__}")
 
+    for name in (*NUISANCE_NAMES, "quality_score"):
+        if row[name] is None or not math.isfinite(float(row[name])):
+            reasons.append(f"invalid_{name}")
     yaw = _number(row["yaw"])
     pitch = _number(row["pitch"])
     roll = _number(row["roll"])
@@ -148,11 +153,25 @@ def measure_photo(db: Database, photo_hash: str) -> dict[str, Any]:
     return {"hash": photo_hash, "eligible": not reasons, "reasons": reasons, "metrics": metrics}
 
 
-def extract_features(landmarks: np.ndarray) -> tuple[dict[str, float], np.ndarray]:
+def extract_features(
+    landmarks: np.ndarray, image_size: Any = None,
+) -> tuple[dict[str, float], np.ndarray]:
+    """Measure in isotropic image coordinates, then normalize by eye distance.
+
+    image_size is mandatory for normalized detector output; omitted only for
+    callers already supplying isotropic coordinates (e.g. geometry tests).
+    """
     pts = np.asarray(landmarks, dtype=np.float64)
     if pts.ndim != 2 or pts.shape[1] < 2 or len(pts) <= max(FACE_OVAL):
         raise ValueError("MediaPipe face landmarks are incomplete")
-    pts = pts[:, :2]
+    pts = pts[:, :2].copy()
+    if not np.isfinite(pts).all():
+        raise ValueError("Face landmarks must be finite")
+    if image_size is not None:
+        size = np.asarray(image_size, dtype=float)
+        if size.shape != (2,) or not np.isfinite(size).all() or np.any(size <= 0):
+            raise ValueError("Image dimensions are missing or invalid")
+        pts *= size / size[0]
 
     left_eye = (pts[33] + pts[133]) / 2
     right_eye = (pts[263] + pts[362]) / 2
@@ -171,7 +190,9 @@ def extract_features(landmarks: np.ndarray) -> tuple[dict[str, float], np.ndarra
     oval = aligned[list(FACE_OVAL)]
     lower = aligned[list(LOWER_FACE)]
 
-    face_height = float(oval[:, 1].max() - oval[:, 1].min())
+    # The forehead is particularly vulnerable to hair occlusion. It is retained
+    # in the display contour, but never contributes to the fullness index.
+    face_height = abs(float(aligned[152, 1]))
     temple_width = _distance(aligned[127], aligned[356])
     cheek_width = _distance(aligned[234], aligned[454])
     jaw_width = _distance(aligned[172], aligned[397])
@@ -179,7 +200,7 @@ def extract_features(landmarks: np.ndarray) -> tuple[dict[str, float], np.ndarra
     chin_width = _distance(aligned[176], aligned[400])
     oval_area = _polygon_area(oval)
     lower_area = _polygon_area(lower)
-    perimeter = float(np.sum(np.linalg.norm(oval - np.roll(oval, 1, axis=0), axis=1)))
+    perimeter = float(np.sum(np.linalg.norm(lower - np.roll(lower, 1, axis=0), axis=1)))
     lower_face_height = abs(float(aligned[152, 1] - (aligned[234, 1] + aligned[454, 1]) / 2))
     jaw_angle = (_vertex_angle(aligned[136], aligned[172], aligned[132]) + _vertex_angle(aligned[365], aligned[397], aligned[361])) / (2 * math.pi)
     outline_asymmetry = _outline_asymmetry(aligned, cheek_width)
@@ -191,7 +212,7 @@ def extract_features(landmarks: np.ndarray) -> tuple[dict[str, float], np.ndarra
         "jaw_cheek_ratio": jaw_width / cheek_width,
         "lower_face_width": lower_width,
         "lower_face_area": lower_area,
-        "outline_roundness": 4 * math.pi * oval_area / (perimeter * perimeter),
+        "outline_roundness": 4 * math.pi * lower_area / (perimeter * perimeter),
         "chin_cheek_ratio": chin_width / cheek_width,
         "temple_cheek_ratio": temple_width / cheek_width,
         "lower_face_height": lower_face_height / face_height,
@@ -231,8 +252,8 @@ def recompute_project(
 
     active = _measurement_rows(db, project_id)
     current_profile = _load_profile(db, project_id)
-    if len(active) < 6:
-        return {"status": "insufficient", "measured": len(rows), "eligible": len(active), "required": 6}
+    if len({str(row["captured_at"])[:10] for row in active}) < 6:
+        return {"status": "insufficient", "measured": len(rows), "eligible": len(active), "required": 6, "required_unit": "distinct_days"}
 
     if current_profile is None or rebuild_baseline:
         baseline, correction = _build_profile(active)
@@ -259,7 +280,9 @@ def recompute_project(
             calibration_json = excluded.calibration_json,
             source_revision = excluded.source_revision,
             computed_at = excluded.computed_at,
-            updated_at = excluded.updated_at
+            updated_at = excluded.updated_at,
+            trend_json = NULL,
+            trend_cache_key = NULL
         """,
         (
             project_id,
@@ -272,6 +295,9 @@ def recompute_project(
             updated_at,
         ),
     )
+    # Build the public report once as part of the explicit analysis job. Reads
+    # can then serve the persisted result without repeating the trend math.
+    get_project_trend(db, project_id)
     return {
         "status": "ready",
         "measured": len(rows),
@@ -305,14 +331,43 @@ def get_project_trend(db: Database, project_id: int) -> dict[str, Any]:
         )["total"]
     )
     if profile is None:
-        status = "insufficient" if landmark_count < 6 and measurement_count >= landmark_count else "not_ready"
-        return _empty_trend(status, landmark_count, measurement_count)
+        eligible_days = len({str(row["captured_at"])[:10] for row in _measurement_rows(db, project_id)})
+        status = "insufficient" if measurement_count >= landmark_count and eligible_days < 6 else "not_ready"
+        return _empty_trend(status, landmark_count, measurement_count, eligible_days=eligible_days)
 
     current_revision = project_source_revision(db, project_id)
+    if (
+        profile["cached_trend"] is not None
+        and profile["trend_cache_key"] == _trend_cache_key(profile)
+    ):
+        if current_revision != profile["source_revision"]:
+            return _stale_cached_trend(profile["cached_trend"], current_revision)
+        return profile["cached_trend"]
+
+    return _build_project_trend(
+        db,
+        project_id,
+        profile,
+        current_revision,
+        landmark_count,
+        measurement_count,
+    )
+
+
+def _build_project_trend(
+    db: Database,
+    project_id: int,
+    profile: dict[str, Any],
+    current_revision: str,
+    landmark_count: int,
+    measurement_count: int,
+) -> dict[str, Any]:
     stale = profile["source_revision"] != current_revision or measurement_count < landmark_count
     observations = _score_rows(_measurement_rows(db, project_id), profile)
     if len(observations) < 3:
-        return _empty_trend("insufficient", landmark_count, measurement_count)
+        trend = _empty_trend("insufficient", landmark_count, measurement_count)
+        _store_trend_cache(db, project_id, profile, trend)
+        return trend
 
     daily = _daily_observations(observations)
     points, events = _trend_points(daily)
@@ -344,7 +399,7 @@ def get_project_trend(db: Database, project_id: int) -> dict[str, Any]:
     )
     quality_checks = _quality_diagnostics(db, project_id, profile)
     baseline = profile["baseline"]
-    return {
+    trend = {
         "status": "stale" if stale else "ready",
         "analysis_version": ALGORITHM_VERSION,
         "analysis_revision": current_revision,
@@ -352,6 +407,8 @@ def get_project_trend(db: Database, project_id: int) -> dict[str, Any]:
         "metric": {
             "unit": "personal_robust_sd",
             "baseline_value": 0,
+            "interval_method": "approximate_robust_with_dependence_adjustment",
+            "feature_scope": "lower_face_excluding_forehead",
             "higher_means": "fuller_like",
             "disclaimer": "A personal visual trend, not a weight measurement or medical assessment.",
         },
@@ -359,6 +416,7 @@ def get_project_trend(db: Database, project_id: int) -> dict[str, Any]:
             "start": baseline["start"],
             "end": baseline["end"],
             "observation_count": baseline["observation_count"],
+            "distinct_days": baseline["distinct_days"],
             "frozen": True,
         },
         "calibration": profile["calibration"] or {"status": "automatic"},
@@ -383,6 +441,39 @@ def get_project_trend(db: Database, project_id: int) -> dict[str, Any]:
         "points": points,
         "events": events,
     }
+    _store_trend_cache(db, project_id, profile, trend)
+    return trend
+
+
+def _store_trend_cache(
+    db: Database,
+    project_id: int,
+    profile: dict[str, Any],
+    trend: dict[str, Any],
+) -> None:
+    db.execute(
+        """
+        UPDATE face_shape_profiles
+        SET trend_json = ?, trend_cache_key = ?
+        WHERE project_id = ?
+        """,
+        (
+            json.dumps(trend, separators=(",", ":")),
+            _trend_cache_key(profile),
+            project_id,
+        ),
+    )
+
+
+def _trend_cache_key(profile: dict[str, Any]) -> str:
+    return f"{profile['source_revision']}:{profile['updated_at']}"
+
+
+def _stale_cached_trend(cached_trend: dict[str, Any], current_revision: str) -> dict[str, Any]:
+    stale_trend = json.loads(json.dumps(cached_trend))
+    stale_trend["status"] = "stale"
+    stale_trend["source_revision"] = current_revision
+    return stale_trend
 
 
 def export_project_analysis(db: Database, project_id: int, format: str = "csv") -> tuple[str, str, str]:
@@ -444,6 +535,8 @@ def compare_periods(
     profile = _load_profile(db, project_id)
     if profile is None:
         raise ValueError("Face-shape analysis is not ready")
+    if project_source_revision(db, project_id) != profile["source_revision"]:
+        raise ValueError("Recompute face-shape analysis before comparing changed inputs")
     observations = _score_rows(_measurement_rows(db, project_id), profile)
     period_a = _period_summary(observations, a)
     period_b = _period_summary(observations, b)
@@ -453,11 +546,20 @@ def compare_periods(
         len(period_a["capture_profiles"]) == 1
         and period_a["capture_profiles"] == period_b["capture_profiles"]
     )
-    if abs(delta) <= threshold:
+    limitations = [] if same_profile else ["incompatible_capture_profiles"]
+    selected_a = [item for item in observations if _parse_date(a["start"]) <= item.day <= _parse_date(a["end"])]
+    selected_b = [item for item in observations if _parse_date(b["start"]) <= item.day <= _parse_date(b["end"])]
+    try:
+        _validate_anchor_pose(selected_a, selected_b)
+    except ValueError:
+        limitations.append("pose_or_expression_mismatch")
+    if min(period_a["distinct_days"], period_b["distinct_days"]) < 3:
+        limitations.append("insufficient_distinct_days")
+    if limitations or abs(delta) <= threshold:
         conclusion = "no_clear_change"
     else:
         conclusion = "fuller" if delta > 0 else "leaner"
-    confidence = _combined_confidence(period_a["confidence"], period_b["confidence"], same_profile)
+    confidence = _combined_confidence(period_a["confidence"], period_b["confidence"], not limitations)
     contributions = []
     for index, name in enumerate(FEATURE_NAMES):
         contributions.append(
@@ -480,6 +582,7 @@ def compare_periods(
         "conclusion": conclusion,
         "confidence": confidence,
         "same_capture_profile": same_profile,
+        "limitations": limitations,
         "contributions": sorted(contributions, key=lambda item: abs(item["delta"]), reverse=True),
         "disclaimer": "Face Shape Index is a personal visual trend, not a weight measurement.",
     }
@@ -494,6 +597,8 @@ def update_calibration(
     profile = _load_profile(db, project_id)
     if profile is None:
         raise ValueError("Run face-shape analysis before calibration")
+    if project_source_revision(db, project_id) != profile["source_revision"]:
+        raise ValueError("Recompute face-shape analysis before calibrating changed inputs")
     if lighter is None and fuller is None:
         calibration = None
     elif lighter is None or fuller is None:
@@ -512,11 +617,13 @@ def update_calibration(
         if not shared_profiles:
             raise ValueError("Anchor periods use incompatible capture profiles")
         _validate_anchor_pose(light, full)
-        light_components = np.median(np.stack([item.components[FULLNESS_INDICES] for item in light]), axis=0)
-        full_components = np.median(np.stack([item.components[FULLNESS_INDICES] for item in full]), axis=0)
+        if {item.capture_profile for item in light} != {item.capture_profile for item in full} or len(shared_profiles) != 1:
+            raise ValueError("Anchor periods must use one matching capture profile")
+        light_components = np.median(np.stack([item["components"][FULLNESS_INDICES] for item in _daily_observations(light)]), axis=0)
+        full_components = np.median(np.stack([item["components"][FULLNESS_INDICES] for item in _daily_observations(full)]), axis=0)
         difference = full_components - light_components
         orientation = 1.0 if float(np.median(difference)) >= 0 else -1.0
-        strengths = np.abs(difference)
+        strengths = np.maximum(orientation * difference, 0.0)
         if float(np.median(strengths)) < 0.2:
             raise ValueError("The selected periods are not separated enough for reliable calibration")
         personalized = strengths / max(float(strengths.sum()), 1e-9)
@@ -524,7 +631,8 @@ def update_calibration(
             profile["baseline"].get("default_weights", np.ones(len(FULLNESS_FEATURE_NAMES)) / len(FULLNESS_FEATURE_NAMES)),
             dtype=np.float64,
         )
-        weights = 0.5 * personalized + 0.5 * automatic
+        weights = (0.5 * personalized + 0.5 * automatic) * (strengths > 0)
+        weights /= weights.sum()
         calibration = {
             "status": "calibrated",
             "lighter": {**lighter, "used": len(light)},
@@ -537,7 +645,11 @@ def update_calibration(
 
     now = datetime.now().isoformat(sep=" ")
     db.execute(
-        "UPDATE face_shape_profiles SET calibration_json = ?, updated_at = ? WHERE project_id = ?",
+        """
+        UPDATE face_shape_profiles
+        SET calibration_json = ?, updated_at = ?, trend_json = NULL, trend_cache_key = NULL
+        WHERE project_id = ?
+        """,
         (json.dumps(calibration, separators=(",", ":")) if calibration else None, now, project_id),
     )
     return calibration or {"status": "automatic"}
@@ -547,7 +659,10 @@ def project_source_revision(db: Database, project_id: int) -> str:
     rows = db.fetchall(
         """
         SELECT p.hash, p.captured_at, p.skipped, p.landmarks_path,
-               COALESCE(m.algorithm_version, ''), COALESCE(m.source_signature, '')
+               COALESCE(m.algorithm_version, ''), COALESCE(m.source_signature, ''),
+               p.quality_score, p.yaw, p.pitch, p.roll, p.mouth_open_ratio,
+               p.camera_make, p.camera_model, p.width, p.height, m.eligible,
+               m.metrics_json, m.contour_json, m.capture_profile
         FROM photos p
         JOIN project_photos pp ON pp.photo_hash = p.hash
         LEFT JOIN face_shape_measurements m ON m.photo_hash = p.hash
@@ -559,38 +674,70 @@ def project_source_revision(db: Database, project_id: int) -> str:
     digest = hashlib.sha256()
     for row in rows:
         digest.update("|".join(str(value) for value in row).encode("utf-8"))
+        digest.update(_landmark_signature(Path(row["landmarks_path"]) if row["landmarks_path"] else None).encode())
         digest.update(b"\n")
     return digest.hexdigest()
 
 
 def _build_profile(rows: list[Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    matrix = np.array([_row_features(row) for row in rows], dtype=np.float64)
-    nuisance = np.array([_row_nuisance(row) for row in rows], dtype=np.float64)
+    # Learn nuisance effects ONLY from within-day, same-camera variation.
+    # Archive-wide regression confounds actual time trends with camera habits.
+    grouped: dict[tuple[str, str], list[Any]] = defaultdict(list)
+    for row in rows:
+        grouped[(str(row["captured_at"])[:10], row["capture_profile"])].append(row)
+    daily_rows, matrix, nuisance = [], [], []
+    x_residual, y_residual = [], []
+    for key in sorted(grouped):
+        # Identical repeats must not create additional correction evidence.
+        unique = {tuple(_row_features(row) + _row_nuisance(row)): row for row in grouped[key]}
+        items = list(unique.values())
+        features = np.asarray([_row_features(row) for row in items])
+        poses = np.asarray([_row_nuisance(row) for row in items])
+        matrix.append(np.median(features, axis=0))
+        nuisance.append(np.median(poses, axis=0))
+        daily_rows.append(items[0])
+        if len(items) >= 2:
+            # One contrast per date/profile keeps large bursts from dominating.
+            first, last = sorted(range(len(items)), key=lambda i: tuple(poses[i]))[::len(items)-1]
+            x_residual.append(poses[last] - poses[first])
+            y_residual.append(features[last] - features[first])
+    matrix = np.asarray(matrix)
+    nuisance = np.asarray(nuisance)
     nuisance_center = np.median(nuisance, axis=0)
-    centered_nuisance = nuisance - nuisance_center
-    slopes = np.zeros((len(FEATURE_NAMES), len(NUISANCE_NAMES)), dtype=np.float64)
-    corrected = matrix.copy()
-    for feature_index in range(len(FEATURE_NAMES)):
-        coefficients = _robust_slopes(centered_nuisance, matrix[:, feature_index])
-        slopes[feature_index] = coefficients
-        corrected[:, feature_index] -= centered_nuisance @ coefficients
-    capture_profiles = [str(row["capture_profile"]) for row in rows]
-    capture_offsets = _overlapping_capture_offsets(rows, corrected, capture_profiles)
+    slopes = np.zeros((len(FEATURE_NAMES), len(NUISANCE_NAMES)))
+    correction_days = len({str(row["captured_at"])[:10] for row in daily_rows
+                           if len(grouped[(str(row["captured_at"])[:10], row["capture_profile"])]) > 1})
+    if len(x_residual) >= 8 and correction_days >= 8:
+        x = np.asarray(x_residual)
+        y = np.asarray(y_residual)
+        for feature_index in range(len(FEATURE_NAMES)):
+            slopes[feature_index] = _robust_slopes(np.vstack([x, -x]), np.concatenate([y[:, feature_index], -y[:, feature_index]]))
+    corrected = matrix - (nuisance - nuisance_center) @ slopes.T
+    capture_profiles = [str(row["capture_profile"]) for row in daily_rows]
+    capture_offsets = _overlapping_capture_offsets(daily_rows, corrected, capture_profiles)
     for row_index, capture_profile in enumerate(capture_profiles):
-        corrected[row_index] -= np.asarray(capture_offsets.get(capture_profile, [0.0] * len(FEATURE_NAMES)))
-    center = np.median(corrected, axis=0)
-    scale = 1.4826 * np.median(np.abs(corrected - center), axis=0)
-    fallback = np.std(corrected, axis=0)
-    scale = np.where(scale > 1e-8, scale, np.where(fallback > 1e-8, fallback, 1.0))
-    default_weights = _default_fullness_weights(corrected, center, scale)
-    dates = sorted(str(row["captured_at"])[:10] for row in rows)
+        corrected[row_index] -= np.asarray(capture_offsets.get(capture_profile, np.zeros(len(FEATURE_NAMES))))
+    # Each calendar day gets one baseline vote, even with multiple cameras.
+    by_day: dict[str, list[np.ndarray]] = defaultdict(list)
+    for row, values in zip(daily_rows, corrected):
+        by_day[str(row["captured_at"])[:10]].append(values)
+    balanced = np.stack([np.median(by_day[day], axis=0) for day in sorted(by_day)])
+    center = np.median(balanced, axis=0)
+    scale = 1.4826 * np.median(np.abs(balanced - center), axis=0)
+    # Numerical/landmark noise must not become enormous standardized changes
+    # when a baseline feature is effectively constant. These are conservative
+    # engineering floors, not empirically measured clinical precision.
+    scale_floor = np.maximum(0.01, np.abs(center) * 0.01)
+    scale = np.maximum(scale, scale_floor)
+    default_weights = _default_fullness_weights(balanced, center, scale)
+    dates = sorted(by_day)
     baseline = {
         "feature_names": list(FEATURE_NAMES),
         "center": np.round(center, 10).tolist(),
         "scale": np.round(scale, 10).tolist(),
-        "start": dates[0],
-        "end": dates[-1],
-        "observation_count": len(rows),
+        "scale_floor": np.round(scale_floor, 10).tolist(),
+        "start": dates[0], "end": dates[-1],
+        "observation_count": len(rows), "distinct_days": len(dates),
         "default_weights": np.round(default_weights, 8).tolist(),
     }
     correction = {
@@ -598,6 +745,10 @@ def _build_profile(rows: list[Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         "nuisance_center": np.round(nuisance_center, 10).tolist(),
         "slopes": np.round(slopes, 10).tolist(),
         "capture_offsets": capture_offsets,
+        "method": "within_day" if np.any(slopes) else "eligibility_filters_only",
+        "paired_days": correction_days,
+        "nuisance_min": np.min([_row_nuisance(row) for row in rows], axis=0).tolist(),
+        "nuisance_max": np.max([_row_nuisance(row) for row in rows], axis=0).tolist(),
     }
     return baseline, correction
 
@@ -618,8 +769,7 @@ def _robust_slopes(x: np.ndarray, y: np.ndarray) -> np.ndarray:
         coefficients = np.linalg.solve(design.T @ weighted_design + ridge, design.T @ (weights * y))
         residual = y - design @ coefficients
         scale = 1.4826 * float(np.median(np.abs(residual - np.median(residual))))
-        if scale <= 1e-10:
-            break
+        scale = max(scale, 1e-6)
         normalized = np.abs(residual) / (1.345 * scale)
         weights = np.where(normalized <= 1, 1.0, 1.0 / np.maximum(normalized, 1e-9))
     return coefficients[1:] / predictor_scale
@@ -630,7 +780,10 @@ def _default_fullness_weights(corrected: np.ndarray, center: np.ndarray, scale: 
     if len(corrected) < 8:
         return np.ones(count, dtype=np.float64) / count
     standardized = (corrected[:, FULLNESS_INDICES] - center[FULLNESS_INDICES]) / scale[FULLNESS_INDICES]
-    correlation = np.nan_to_num(np.corrcoef(standardized, rowvar=False), nan=0.0)
+    centered = standardized - standardized.mean(axis=0)
+    norms = np.linalg.norm(centered, axis=0)
+    unit = centered / np.maximum(norms, 1e-12)
+    correlation = unit.T @ unit
     redundancy = np.sum(np.abs(correlation), axis=1) - np.abs(np.diag(correlation))
     weights = 1.0 / (1.0 + np.maximum(redundancy, 0.0))
     weights = np.clip(weights, 0.5 / count, 2.0 / count)
@@ -638,23 +791,21 @@ def _default_fullness_weights(corrected: np.ndarray, center: np.ndarray, scale: 
 
 
 def _overlapping_capture_offsets(rows: list[Any], corrected: np.ndarray, profiles: list[str]) -> dict[str, list[float]]:
-    counts = {profile: profiles.count(profile) for profile in set(profiles)}
+    counts = {profile: profiles.count(profile) for profile in sorted(set(profiles))}
     reference = max(counts, key=counts.get)
-    reference_indices = [index for index, profile in enumerate(profiles) if profile == reference]
-    reference_dates = [_parse_date(str(rows[index]["captured_at"])[:10]) for index in reference_indices]
-    offsets: dict[str, list[float]] = {reference: [0.0] * len(FEATURE_NAMES)}
+    by_profile: dict[str, dict[str, np.ndarray]] = defaultdict(dict)
+    for row, values, profile in zip(rows, corrected, profiles):
+        by_profile[profile][str(row["captured_at"])[:10]] = values
+    offsets = {reference: [0.0] * len(FEATURE_NAMES)}
     for profile in counts:
         if profile == reference:
             continue
-        indices = [index for index, value in enumerate(profiles) if value == profile]
-        dates = [_parse_date(str(rows[index]["captured_at"])[:10]) for index in indices]
-        overlap_start = max(min(reference_dates), min(dates))
-        overlap_end = min(max(reference_dates), max(dates))
-        ref_overlap = [index for index in reference_indices if overlap_start <= _parse_date(str(rows[index]["captured_at"])[:10]) <= overlap_end]
-        profile_overlap = [index for index in indices if overlap_start <= _parse_date(str(rows[index]["captured_at"])[:10]) <= overlap_end]
-        if len(ref_overlap) >= 3 and len(profile_overlap) >= 3:
-            offset = np.median(corrected[profile_overlap], axis=0) - np.median(corrected[ref_overlap], axis=0)
-            offsets[profile] = np.round(offset, 10).tolist()
+        # Date-range overlap alone is not matched evidence: different sampling
+        # within that range can mistake real change for a camera offset.
+        shared = sorted(set(by_profile[reference]) & set(by_profile[profile]))
+        if len(shared) >= 3:
+            differences = [by_profile[profile][day] - by_profile[reference][day] for day in shared]
+            offsets[profile] = np.round(np.median(differences, axis=0), 10).tolist()
     return offsets
 
 
@@ -676,7 +827,8 @@ def _score_rows(rows: list[Any], profile: dict[str, Any], ignore_calibration: bo
     for row in rows:
         raw = np.asarray(_row_features(row), dtype=np.float64)
         nuisance = np.asarray(_row_nuisance(row), dtype=np.float64)
-        corrected = raw - slopes @ (nuisance - nuisance_center)
+        supported_nuisance = np.clip(nuisance, correction.get("nuisance_min", nuisance), correction.get("nuisance_max", nuisance))
+        corrected = raw - slopes @ (supported_nuisance - nuisance_center)
         corrected -= np.asarray(capture_offsets.get(row["capture_profile"], [0.0] * len(FEATURE_NAMES)), dtype=np.float64)
         components = (corrected - center) / scale
         index = orientation * float(np.dot(components[FULLNESS_INDICES], weights))
@@ -708,13 +860,17 @@ def _daily_observations(observations: list[ScoredObservation]) -> list[dict[str,
     result = []
     for day in sorted(grouped):
         items = grouped[day]
+        # Never blend unidentifiable camera differences into one daily reading.
+        profiles = sorted({item.capture_profile for item in items})
+        best_profile = max(profiles, key=lambda name: np.median([item.observation_weight for item in items if item.capture_profile == name]))
+        items = [item for item in items if item.capture_profile == best_profile]
         weights = np.asarray([item.observation_weight for item in items], dtype=np.float64)
         index = _weighted_median(np.asarray([item.index for item in items]), weights)
         representative = min(items, key=lambda item: (abs(item.index - index), -item.quality))
         component_matrix = np.stack([item.components for item in items])
         components = np.asarray([_weighted_median(component_matrix[:, index], weights) for index in range(len(FEATURE_NAMES))])
         agreement = float(np.median(np.std(component_matrix, axis=0))) if len(items) > 1 else 0.0
-        confidence_score = max(0.15, min(1.0, (0.55 + representative.quality * 0.45) * (1.0 - min(agreement, 2.5) / 4)))
+        confidence_score = max(0.15, min(1.0, representative.observation_weight * (1.0 - min(agreement, 2.5) / 4)))
         result.append(
             {
                 "date": day.isoformat(),
@@ -777,9 +933,9 @@ def _trend_points(daily: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], li
                 for index, name in enumerate(FEATURE_NAMES)
             }
             profile_count = len({candidate["capture_profile"] for candidate in local})
-            if _effective_sample_size(local_weights) >= 6 and uncertainty <= 0.45 and profile_count == 1:
+            if _effective_sample_size(local_weights) >= 6 and uncertainty <= 0.45 and profile_count == 1 and np.median([c["confidence_score"] for c in local]) >= 0.65:
                 confidence = "high"
-            elif _effective_sample_size(local_weights) >= 3 and uncertainty <= 0.9:
+            elif _effective_sample_size(local_weights) >= 3 and uncertainty <= 0.9 and np.median([c["confidence_score"] for c in local]) >= 0.35:
                 confidence = "medium"
             window_start = local[0]["date"]
             window_end = local[-1]["date"]
@@ -823,15 +979,24 @@ def _local_robust_estimate(local: list[dict[str, Any]], target: date) -> tuple[f
         coefficients, *_ = np.linalg.lstsq(design * root[:, None], y * root, rcond=None)
         residual = y - design @ coefficients
         scale = 1.4826 * _weighted_median(np.abs(residual - _weighted_median(residual, weights)), weights)
-        if scale <= 1e-9:
-            break
+        # A zero MAD can mean a perfect inlier line plus a gross outlier.
+        # Do not accept the contaminated least-squares fit in that case.
+        scale = max(scale, 0.04)
         normalized = np.abs(residual) / (1.345 * scale)
         robust = np.where(normalized <= 1, 1.0, 1.0 / np.maximum(normalized, 1e-9))
         weights = base_weights * robust
     residual = y - design @ coefficients
     spread = 1.4826 * _weighted_median(np.abs(residual - _weighted_median(residual, weights)), weights)
     effective_n = max(_effective_sample_size(weights), 1.0)
-    half_width_95 = max(0.08, 1.96 * spread / math.sqrt(effective_n))
+    # Intercept leverage grows near a window edge; sqrt(n) alone understates it.
+    normalized_weights = weights / max(weights.sum(), 1e-12)
+    mean_x = float(np.dot(normalized_weights, x))
+    variance_x = float(np.dot(normalized_weights, (x - mean_x) ** 2))
+    leverage = (1.0 + mean_x * mean_x / max(variance_x, 1e-9)) / effective_n
+    # Adjacent residuals need not be independent (lighting/pose habits persist).
+    inflation = _serial_inflation(residual)
+    critical = float(student_t.ppf(0.975, max(1.0, effective_n - 2)))
+    half_width_95 = max(0.08, critical * max(spread, 0.04) * math.sqrt(leverage * inflation))
     return float(coefficients[0]), float(half_width_95)
 
 
@@ -859,7 +1024,25 @@ def _weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
     if total <= 1e-12:
         return float(np.median(values))
     position = int(np.searchsorted(np.cumsum(ordered_weights), total / 2, side="left"))
+    if position + 1 < len(ordered_values) and math.isclose(float(np.cumsum(ordered_weights)[position]), total / 2, rel_tol=1e-12):
+        return float((ordered_values[position] + ordered_values[position + 1]) / 2)
     return float(ordered_values[min(position, len(ordered_values) - 1)])
+
+
+def _serial_inflation(values: np.ndarray) -> float:
+    """Conservative AR(1) effective-sample adjustment; never shrink intervals."""
+    values = np.asarray(values, dtype=float)
+    if len(values) < 5 or min(np.std(values[:-1]), np.std(values[1:])) < 1e-9:
+        return 1.0
+    rho = float(np.clip(np.corrcoef(values[:-1], values[1:])[0, 1], 0, 0.8))
+    return min(len(values) / 2, (1 + rho) / (1 - rho))
+
+
+def _block_indices(n: int, rng: np.random.Generator, repeats: int) -> np.ndarray:
+    """Circular moving blocks preserve short-range dependence between days."""
+    length = max(1, min(n // 2, math.ceil(n ** (1 / 3))))
+    starts = rng.integers(0, n, size=(repeats, math.ceil(n / length)))
+    return ((starts[:, :, None] + np.arange(length)) % n).reshape(repeats, -1)[:, :n]
 
 
 def _median_interval_half_width(values: np.ndarray) -> float:
@@ -867,7 +1050,7 @@ def _median_interval_half_width(values: np.ndarray) -> float:
     if len(values) < 2:
         return 0.25
     rng = np.random.default_rng(20_240_610 + len(values))
-    medians = np.median(rng.choice(values, size=(400, len(values)), replace=True), axis=1)
+    medians = np.median(values[_block_indices(len(values), rng, 400)], axis=1)
     low, high = np.quantile(medians, [0.025, 0.975])
     center = float(np.median(values))
     return max(0.08, float(max(center - low, high - center)))
@@ -882,13 +1065,16 @@ def _trend_statistics(daily: list[dict[str, Any]], points: list[dict[str, Any]])
     slope = _theil_sen_slope(x, y) * 365.25
     rng = np.random.default_rng(20_240_611)
     bootstrap: list[float] = []
-    for _ in range(300):
-        chosen = rng.integers(0, len(x), len(x))
+    for chosen in _block_indices(len(x), rng, 300):
         candidate = _theil_sen_slope(x[chosen], y[chosen])
         if math.isfinite(candidate):
             bootstrap.append(candidate * 365.25)
     slope_low, slope_high = (np.quantile(bootstrap, [0.025, 0.975]).tolist() if bootstrap else [slope, slope])
-    tau, p_value = _kendall_trend(y)
+    # Kendall's independent-observation p-value is too optimistic when adjacent
+    # residuals remain correlated. Inflate its null variance, conservatively.
+    residual = y - slope / 365.25 * x
+    inflation = _serial_inflation(residual)
+    tau, p_value = _kendall_trend(y, variance_inflation=inflation)
     if slope > 0 and slope_low >= 0 and p_value < 0.05:
         direction = "increasing"
     elif slope < 0 and slope_high <= 0 and p_value < 0.05:
@@ -896,12 +1082,12 @@ def _trend_statistics(daily: list[dict[str, Any]], points: list[dict[str, Any]])
     else:
         direction = "no_clear_trend"
     trend_by_date = {point["date"]: point.get("trend_index") for point in points if not point.get("is_break")}
-    residuals = np.asarray([item["index"] - trend_by_date.get(item["date"], item["index"]) for item in daily], dtype=np.float64)
+    residuals = np.asarray([item["index"] - (trend_by_date.get(item["date"]) if trend_by_date.get(item["date"]) is not None else item["index"]) for item in daily], dtype=np.float64)
     variability = 1.4826 * float(np.median(np.abs(residuals - np.median(residuals))))
     stability = "stable" if variability < 0.35 else "variable" if variability > 0.8 else "typical"
     return {
         "status": "ready",
-        "method": "Theil-Sen slope with bootstrap interval and Kendall trend evidence",
+        "method": "Theil-Sen slope with moving-block interval and dependence-adjusted Kendall evidence",
         "annual_change": round(float(slope), 3),
         "annual_change_lower": round(float(slope_low), 3),
         "annual_change_upper": round(float(slope_high), 3),
@@ -916,16 +1102,19 @@ def _trend_statistics(daily: list[dict[str, Any]], points: list[dict[str, Any]])
 
 
 def _theil_sen_slope(x: np.ndarray, y: np.ndarray) -> float:
-    slopes = [
-        float((y[right] - y[left]) / (x[right] - x[left]))
-        for left in range(len(x))
-        for right in range(left + 1, len(x))
-        if x[right] != x[left]
-    ]
-    return float(np.median(slopes)) if slopes else math.nan
+    if len(x) <= 200:
+        left, right = np.triu_indices(len(x), 1)
+    else:
+        rng = np.random.default_rng(20240916)
+        left = rng.integers(0, len(x), 20000)
+        right = rng.integers(0, len(x), 20000)
+    differences = x[right] - x[left]
+    valid = differences != 0
+    slopes = (y[right[valid]] - y[left[valid]]) / differences[valid]
+    return float(np.median(slopes)) if len(slopes) else math.nan
 
 
-def _kendall_trend(values: np.ndarray) -> tuple[float, float]:
+def _kendall_trend(values: np.ndarray, variance_inflation: float = 1.0) -> tuple[float, float]:
     concordance = 0
     for left in range(len(values)):
         for right in range(left + 1, len(values)):
@@ -940,7 +1129,8 @@ def _kendall_trend(values: np.ndarray) -> tuple[float, float]:
     tau = concordance / denominator if denominator else 0.0
     tie_adjustment = float(np.sum(tie_counts * (tie_counts - 1) * (2 * tie_counts + 5)))
     variance = (n * (n - 1) * (2 * n + 5) - tie_adjustment) / 18
-    z = concordance / math.sqrt(variance) if variance > 0 else 0.0
+    corrected_score = math.copysign(max(0, abs(concordance) - 1), concordance)
+    z = corrected_score / math.sqrt(variance * variance_inflation) if variance > 0 else 0.0
     return tau, math.erfc(abs(z) / math.sqrt(2))
 
 
@@ -953,21 +1143,35 @@ def _possible_change_point(daily: list[dict[str, Any]]) -> dict[str, Any] | None
     if scale <= 1e-8:
         return None
     candidates: list[tuple[float, int, float]] = []
-    for split in range(4, len(values) - 3):
+    splits = np.unique(np.linspace(4, len(values) - 4, min(128, len(values) - 7), dtype=int))
+    for split in splits:
         delta = float(np.median(values[split:]) - np.median(values[:split]))
         balance = math.sqrt(split * (len(values) - split) / len(values))
         candidates.append((abs(delta) / scale * balance, split, delta))
-    _, split, delta = max(candidates)
+    best_score, split, delta = max(candidates)
     effect = abs(delta) / scale
     if abs(delta) < 0.35 or effect < 0.8:
+        return None
+    # The split was selected after searching many dates. Compare the maximum
+    # statistic against block permutations of the entire scan, not a test that
+    # pretends the selected date was specified in advance.
+    rng = np.random.default_rng(20_240_612)
+    block_size = max(2, math.ceil(len(values) ** (1 / 3)))
+    blocks = [values[i:i + block_size] for i in range(0, len(values), block_size)]
+    exceedances = 0
+    for _ in range(199):
+        shuffled = np.concatenate([blocks[i] for i in rng.permutation(len(blocks))])
+        maximum = max(abs(float(np.median(shuffled[k:]) - np.median(shuffled[:k]))) / scale
+                      * math.sqrt(k * (len(values) - k) / len(values))
+                      for k in splits)
+        exceedances += maximum >= best_score
+    scan_p = (1 + exceedances) / 200
+    if scan_p >= .05:
         return None
     left = values[:split]
     right = values[split:]
     rng = np.random.default_rng(20_240_612)
-    differences = [
-        float(np.median(rng.choice(right, len(right), replace=True)) - np.median(rng.choice(left, len(left), replace=True)))
-        for _ in range(300)
-    ]
+    differences = np.median(right[_block_indices(len(right), rng, 300)], axis=1) - np.median(left[_block_indices(len(left), rng, 300)], axis=1)
     low, high = np.quantile(differences, [0.025, 0.975])
     if low <= 0 <= high:
         return None
@@ -976,7 +1180,8 @@ def _possible_change_point(daily: list[dict[str, Any]]) -> dict[str, Any] | None
         "direction": "higher" if delta > 0 else "lower",
         "delta": round(delta, 2),
         "effect_size": round(effect, 2),
-        "confidence": "strong" if effect >= 1.2 else "moderate",
+        "confidence": "moderate",
+        "scan_adjusted_p_value": round(scan_p, 4),
         "label": "Possible sustained shift",
     }
 
@@ -1056,10 +1261,16 @@ def _period_summary(observations: list[ScoredObservation], period: dict[str, str
     index = float(np.median(values))
     uncertainty = _median_interval_half_width(values)
     representative = min(items, key=lambda item: (abs(item.index - index), -item.quality))
-    contour = np.median(np.stack([item.contour for item in items]), axis=0)
+    by_hash = {item.hash: item for item in items}
+    contour = np.median(np.stack([by_hash[item["hash"]].contour for item in daily]), axis=0)
     components = np.median(np.stack([item["components"] for item in daily]), axis=0)
     profiles = sorted({item.capture_profile for item in items})
-    confidence = "high" if len(daily) >= 8 and uncertainty <= 0.45 and len(profiles) == 1 else "medium" if len(daily) >= 4 and uncertainty <= 0.9 else "low"
+    median_quality = float(np.median([item["confidence_score"] for item in daily]))
+    confidence = "low"
+    if len(daily) >= 8 and uncertainty <= 0.45 and len(profiles) == 1 and median_quality >= .65:
+        confidence = "high"
+    elif len(daily) >= 4 and uncertainty <= .9 and median_quality >= .35:
+        confidence = "medium"
     return {
         "start": start.isoformat(),
         "end": end.isoformat(),
@@ -1135,7 +1346,9 @@ def _quality_diagnostics(db: Database, project_id: int, profile: dict[str, Any])
         "exclusion_reasons": dict(sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))),
         "capture_profiles": dict(sorted(profiles.items(), key=lambda item: (-item[1], item[0]))),
         "uncorrected_capture_profiles": sorted(set(profiles) - corrected_profiles),
-        "nuisance_correction": "regularized" if profile["baseline"]["observation_count"] >= 8 else "eligibility_filters_only",
+        "nuisance_correction": profile["correction"].get("method", "eligibility_filters_only"),
+        "hair_handling": "forehead_excluded_from_index; no_beard_or_occlusion_model",
+        "baseline_distinct_days": profile["baseline"].get("distinct_days"),
         "daily_deduplication": True,
     }
 
@@ -1144,6 +1357,12 @@ def _load_profile(db: Database, project_id: int) -> dict[str, Any] | None:
     row = db.fetchone("SELECT * FROM face_shape_profiles WHERE project_id = ?", (project_id,))
     if row is None or row["algorithm_version"] != ALGORITHM_VERSION:
         return None
+    cached_trend = None
+    if row["trend_json"]:
+        try:
+            cached_trend = json.loads(row["trend_json"])
+        except json.JSONDecodeError:
+            cached_trend = None
     return {
         "baseline": json.loads(row["baseline_json"]),
         "correction": json.loads(row["correction_json"]),
@@ -1151,6 +1370,8 @@ def _load_profile(db: Database, project_id: int) -> dict[str, Any] | None:
         "source_revision": row["source_revision"],
         "computed_at": str(row["computed_at"]),
         "updated_at": str(row["updated_at"]),
+        "cached_trend": cached_trend,
+        "trend_cache_key": row["trend_cache_key"],
     }
 
 
@@ -1163,20 +1384,24 @@ def _row_nuisance(row: Any) -> list[float]:
     return [_number(row[name]) for name in NUISANCE_NAMES]
 
 
-def _empty_trend(status: str, landmark_count: int, measurement_count: int) -> dict[str, Any]:
+def _empty_trend(status: str, landmark_count: int, measurement_count: int, eligible_days: int = 0) -> dict[str, Any]:
     return {
         "status": status,
         "analysis_version": ALGORITHM_VERSION,
         "coverage": {
+            "eligible_days": eligible_days,
             "landmark_photos": landmark_count,
             "measured_photos": measurement_count,
             "required": 6,
+            "required_unit": "distinct_days",
         },
         "points": [],
         "events": [],
         "metric": {
             "unit": "personal_robust_sd",
             "baseline_value": 0,
+            "interval_method": "approximate_robust_with_dependence_adjustment",
+            "feature_scope": "lower_face_excluding_forehead",
             "higher_means": "fuller_like",
             "disclaimer": "A personal visual trend, not a weight measurement or medical assessment.",
         },
@@ -1205,11 +1430,13 @@ def _validated_period(period: dict[str, str]) -> tuple[date, date]:
 
 
 def _validate_anchor_samples(items: list[ScoredObservation], label: str) -> None:
-    if len(items) < 5 or len({item.day for item in items}) < 3:
-        raise ValueError(f"The {label} period needs at least 5 eligible selfies across 3 dates")
+    if len({item.day for item in items}) < 5:
+        raise ValueError(f"The {label} period needs at least 5 distinct eligible dates")
 
 
 def _validate_anchor_pose(a: list[ScoredObservation], b: list[ScoredObservation]) -> None:
+    a = list({item.day: item for item in sorted(a, key=lambda item: item.quality)}.values())
+    b = list({item.day: item for item in sorted(b, key=lambda item: item.quality)}.values())
     for name, threshold in (("yaw", 3.0), ("pitch", 3.0), ("roll", 3.0), ("mouth_open_ratio", 0.04)):
         left = float(np.median([getattr(item, name) for item in a]))
         right = float(np.median([getattr(item, name) for item in b]))
@@ -1224,6 +1451,7 @@ def _point_near_days_before(points: list[dict[str, Any]], latest: dict[str, Any]
         for point in points
         if _parse_date(point["date"]) < _parse_date(latest["date"])
         and point.get("segment") == latest.get("segment")
+        and abs((_parse_date(point["date"]) - target).days) <= 21
     ]
     return min(candidates, key=lambda point: abs((_parse_date(point["date"]) - target).days), default=None)
 

@@ -262,6 +262,7 @@ export type FaceShapeTrend = {
   status: FaceShapeStatus;
   analysis_version: string;
   analysis_revision?: string;
+  source_revision?: string;
   generated_at?: string;
   metric: {
     unit: string;
@@ -273,6 +274,7 @@ export type FaceShapeTrend = {
     start: string;
     end: string;
     observation_count: number;
+    distinct_days?: number;
     frozen: boolean;
   };
   calibration?: {
@@ -347,6 +349,7 @@ export type FaceShapeComparison = {
   conclusion: "fuller" | "leaner" | "no_clear_change";
   confidence: "high" | "medium" | "low";
   same_capture_profile: boolean;
+  limitations?: string[];
   contributions: Array<{ region: string; feature: string; delta: number; kind?: "fullness" | "proportion"; observation?: string }>;
   disclaimer: string;
 };

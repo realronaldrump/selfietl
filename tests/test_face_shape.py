@@ -7,6 +7,7 @@ from datetime import date, timedelta
 import numpy as np
 from fastapi.testclient import TestClient
 
+import selfietl.pipeline.face_shape as face_shape_pipeline
 from selfietl.config import load_config
 from selfietl.db import Database
 from selfietl.pipeline.face_shape import (
@@ -101,7 +102,8 @@ def test_recompute_builds_frozen_baseline_trend_and_comparison(tmp_path):
     assert trend["coverage"]["eligible_photos"] == 12
     assert any(point.get("trend_index") is not None for point in trend["points"])
     assert trend["statistics"]["status"] == "ready"
-    assert trend["statistics"]["direction"] == "increasing"
+    # Only twelve sparse observations: a positive slope is not certain evidence.
+    assert trend["statistics"]["annual_change"] > 0
     assert trend["insights"]
     assert all("components" in point for point in trend["points"] if not point.get("is_break"))
 
@@ -117,6 +119,46 @@ def test_recompute_builds_frozen_baseline_trend_and_comparison(tmp_path):
     recompute_project(db, project_id, rebuild_baseline=False)
     profile_after = db.fetchone("SELECT baseline_json FROM face_shape_profiles WHERE project_id = ?", (project_id,))["baseline_json"]
     assert profile_after == profile_before
+
+
+def test_cached_trend_skips_rescoring_on_subsequent_reads(tmp_path, monkeypatch):
+    db, project_id = create_project_with_landmarks(tmp_path, [0.9] * 6 + [1.1] * 6)
+    recompute_project(db, project_id)
+
+    first = get_project_trend(db, project_id)
+    cache = db.fetchone(
+        "SELECT trend_json, trend_cache_key FROM face_shape_profiles WHERE project_id = ?",
+        (project_id,),
+    )
+    assert cache["trend_json"]
+    assert cache["trend_cache_key"]
+
+    def fail_if_rescored(*args, **kwargs):
+        raise AssertionError("cached trend should not rescore observations")
+
+    monkeypatch.setattr(face_shape_pipeline, "_score_rows", fail_if_rescored)
+    second = get_project_trend(db, project_id)
+
+    assert second == first
+
+
+def test_changed_source_serves_cached_trend_as_stale_until_recompute(tmp_path, monkeypatch):
+    db, project_id = create_project_with_landmarks(tmp_path, [0.9] * 6 + [1.1] * 6)
+    recompute_project(db, project_id)
+    ready = get_project_trend(db, project_id)
+
+    db.execute("UPDATE photos SET skipped = 1 WHERE hash = ?", ("shape-0",))
+
+    def fail_if_rescored(*args, **kwargs):
+        raise AssertionError("stale cached trend should not rescore observations")
+
+    monkeypatch.setattr(face_shape_pipeline, "_score_rows", fail_if_rescored)
+    stale = get_project_trend(db, project_id)
+
+    assert stale["status"] == "stale"
+    assert stale["analysis_revision"] == ready["analysis_revision"]
+    assert stale["source_revision"] != ready["analysis_revision"]
+    assert stale["points"] == ready["points"]
 
 
 def test_calibration_validates_ranges_and_api_returns_trend(tmp_path):

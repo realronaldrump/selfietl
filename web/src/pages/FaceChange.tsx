@@ -67,7 +67,7 @@ export function FaceChange({ project }: { project?: Project | null }) {
   useEffect(() => {
     const trend = trendQuery.data;
     if (!activeProject || !trend || !["not_ready", "stale"].includes(trend.status)) return;
-    const key = `${activeProject.id}:${trend.analysis_revision ?? trend.status}`;
+    const key = `${activeProject.id}:${trend.source_revision ?? trend.analysis_revision ?? trend.status}`;
     if (recomputeAttempt.current === key || recomputeMutation.isPending) return;
     recomputeAttempt.current = key;
     recomputeMutation.mutate();
@@ -107,7 +107,7 @@ export function FaceChange({ project }: { project?: Project | null }) {
     return <ShapePreparing pending={recomputeMutation.isPending} error={recomputeMutation.error?.message} />;
   }
   if (trend.status === "insufficient") {
-    return <InsufficientShape count={trend.coverage.measured_photos ?? trend.coverage.landmark_photos ?? 0} required={trend.coverage.required ?? 6} />;
+    return <InsufficientShape count={trend.coverage.eligible_days ?? trend.coverage.measured_photos ?? trend.coverage.landmark_photos ?? 0} required={trend.coverage.required ?? 6} />;
   }
 
   const summary = trend.summary;
@@ -381,14 +381,14 @@ function MethodPanel({ projectId, trend }: { projectId: number; trend: FaceShape
           <CircleGauge className="h-4 w-4 text-ink/35" />
         </summary>
         <div className="mt-3 space-y-3 text-sm font-semibold leading-6 text-ink/60">
-          <p>Stable eye landmarks align each frame. Multiple cheek, temple, jaw, chin, length, roundness, and symmetry measurements are combined after reducing pose, expression, camera, and low-quality-frame effects.</p>
-          <p>Selfie bursts count as one day. The sustained pattern uses nearby days and favors clearer, straighter photos; the shaded range reflects uncertainty.</p>
+          <p>Measurements use the photo’s actual proportions and are aligned by the eyes. The index combines cheek, jaw, chin, and lower-face measurements; the forehead and hair silhouette do not contribute. Temple balance and symmetry are shown separately.</p>
+          <p>Selfie bursts count as one day, including when building the baseline. Pose correction is learned only from same-day, same-camera examples. The shaded range is an approximate uncertainty estimate that accounts for sparse samples, chart edges, and related observations.</p>
           <p>The baseline is frozen across {trend.baseline?.observation_count ?? 0} eligible selfies from {formatDateRange(trend.baseline?.start, trend.baseline?.end)}.</p>
           <div className="grid grid-cols-2 gap-2 text-xs">
             <EvidenceStat label="Used" value={trend.coverage.eligible_photos ?? 0} />
             <EvidenceStat label="Excluded" value={trend.coverage.excluded_photos ?? 0} />
           </div>
-          <p className="rounded-md bg-amber/10 p-3 text-xs leading-5 text-ink/65">Hydration, aging, facial hair, medication, lighting, and camera perspective can also change appearance. Treat this as supporting visual evidence, not a diagnosis.</p>
+          <p className="rounded-md bg-amber/10 p-3 text-xs leading-5 text-ink/65">Hair or beards covering the cheeks or jaw can still affect landmark detection. Hydration, aging, medication, lighting, and camera perspective can also change appearance. Treat this as supporting visual evidence, not a diagnosis.</p>
           <div className="border-t border-ink/10 pt-3">
             <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.12em] text-ink/45"><Download className="h-4 w-4" />Export</div>
             <div className="mt-2 flex flex-wrap gap-2">
@@ -431,7 +431,7 @@ function NoProject() { return <PageFrame size="narrow"><Panel><ScanFace classNam
 function ShapeLoading() { return <PageFrame size="wide"><div className="space-y-4"><div className="h-48 animate-pulse rounded-xl bg-ink/10" /><div className="h-96 animate-pulse rounded-xl bg-ink/8" /></div></PageFrame>; }
 function ShapePreparing({ pending, error }: { pending: boolean; error?: string }) { return <PageFrame size="narrow"><Panel className="text-center"><ScanFace className="mx-auto h-10 w-10 text-teal" /><h1 className="mt-4 text-2xl font-black text-ink">Building your face-shape baseline</h1><p className="mt-2 text-sm font-semibold leading-6 text-ink/55">Existing landmarks are being measured locally. Your photos are not uploaded or changed.</p>{pending ? <div className="mt-4 text-xs font-black uppercase tracking-[0.14em] text-teal">Analysis started</div> : null}{error ? <div className="mt-4 text-xs font-semibold text-coral">{error}</div> : null}</Panel></PageFrame>; }
 function ShapeError({ message, onRetry }: { message: string; onRetry: () => void }) { return <PageFrame size="narrow"><Panel className="border border-coral/25 bg-coral/10"><h1 className="text-xl font-black text-ink">Face Change unavailable</h1><p className="mt-2 text-sm font-semibold text-ink/60">{message}</p><Button className="mt-4" onClick={onRetry}>Try again</Button></Panel></PageFrame>; }
-function InsufficientShape({ count, required }: { count: number; required: number }) { return <PageFrame size="narrow"><Panel><ScanFace className="h-8 w-8 text-teal" /><h1 className="mt-3 text-2xl font-black text-ink">A few more clear selfies</h1><p className="mt-2 text-sm font-semibold leading-6 text-ink/55">A reliable personal baseline needs at least {required} clear, front-facing selfies. {count} are ready now.</p></Panel></PageFrame>; }
+function InsufficientShape({ count, required }: { count: number; required: number }) { return <PageFrame size="narrow"><Panel><ScanFace className="h-8 w-8 text-teal" /><h1 className="mt-3 text-2xl font-black text-ink">A few more clear selfies</h1><p className="mt-2 text-sm font-semibold leading-6 text-ink/55">A reliable personal baseline needs at least {required} distinct days with clear, front-facing selfies. {count} are ready now.</p></Panel></PageFrame>; }
 
 function filterRange(points: FaceShapePoint[], range: Range) {
   if (range === "all" || !points.length) return points;
@@ -452,5 +452,5 @@ function formatFullDate(value: string) { const parsed = new Date(`${value}T12:00
 function formatDateRange(start?: string | null, end?: string | null) { if (!start || !end) return "unknown dates"; return start === end ? formatFullDate(start) : `${formatFullDate(start)} – ${formatFullDate(end)}`; }
 function capitalize(value: string) { return value ? value[0].toUpperCase() + value.slice(1) : value; }
 function summarySentence(direction?: string, change?: number | null) { if (direction === "fuller") return `The recent trend is ${formatSigned(change)} fuller-like than roughly 90 days ago.`; if (direction === "leaner") return `The recent trend is ${formatSigned(change)} leaner-like than roughly 90 days ago.`; if (direction === "steady") return "There is no clear sustained change over roughly 90 days."; return "The recent direction is still forming."; }
-function comparisonSentence(comparison: FaceShapeComparison) { if (comparison.conclusion === "no_clear_change") return "No clear shape change rises above the normal variation in these periods."; return `Period B appears ${Math.abs(comparison.delta).toFixed(1)} index units ${comparison.conclusion}-like compared with period A.`; }
+function comparisonSentence(comparison: FaceShapeComparison) { if (comparison.limitations?.length) return "These periods differ in capture conditions or have too few days for a reliable shape-change conclusion."; if (comparison.conclusion === "no_clear_change") return "No clear shape change rises above the normal variation in these periods."; return `Period B appears ${Math.abs(comparison.delta).toFixed(1)} index units ${comparison.conclusion}-like compared with period A.`; }
 function contourPath(points: Array<[number, number]>, a: Array<[number, number]>, b: Array<[number, number]>) { const all = [...a, ...b]; const xs = all.map((point) => point[0]); const ys = all.map((point) => point[1]); const minX = Math.min(...xs); const maxX = Math.max(...xs); const minY = Math.min(...ys); const maxY = Math.max(...ys); const spanX = Math.max(maxX - minX, 0.001); const spanY = Math.max(maxY - minY, 0.001); return points.map((point, index) => `${index ? "L" : "M"}${10 + ((point[0] - minX) / spanX) * 80},${8 + ((point[1] - minY) / spanY) * 84}`).join(" ") + " Z"; }

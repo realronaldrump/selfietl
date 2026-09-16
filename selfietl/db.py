@@ -88,7 +88,9 @@ CREATE TABLE IF NOT EXISTS face_shape_profiles (
     calibration_json TEXT,
     source_revision TEXT NOT NULL,
     computed_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL
+    updated_at TIMESTAMP NOT NULL,
+    trend_json TEXT,
+    trend_cache_key TEXT
 );
 
 CREATE TABLE IF NOT EXISTS hair_measurements (
@@ -169,6 +171,8 @@ class Database:
         with sqlite3.connect(self.path) as conn:
             conn.executescript(SCHEMA)
             _ensure_column(conn, "projects", "last_scanned_at", "TIMESTAMP")
+            _ensure_column(conn, "face_shape_profiles", "trend_json", "TEXT")
+            _ensure_column(conn, "face_shape_profiles", "trend_cache_key", "TEXT")
 
     def fetchone(self, query: str, params: tuple[Any, ...] = ()) -> sqlite3.Row | None:
         with self.connect() as conn:

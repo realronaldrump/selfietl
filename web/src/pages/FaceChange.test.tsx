@@ -78,6 +78,18 @@ describe("FaceChange", () => {
     expect(screen.getByRole("button", { name: "Save calibration" })).toBeDisabled();
   });
 
+  it("explains incompatible captures without claiming shape stability", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const payload = String(input).endsWith("/compare")
+        ? { ...comparison, conclusion: "no_clear_change", confidence: "low", limitations: ["incompatible_capture_profiles"] }
+        : trend;
+      return new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+    renderPage();
+    expect(await screen.findByText(/too few days for a reliable shape-change conclusion/)).toBeInTheDocument();
+    expect(screen.queryByText(/No clear shape change rises above/)).not.toBeInTheDocument();
+  });
+
   it("snaps an entered date to the nearest qualifying observation", async () => {
     renderPage();
     const input = await screen.findByLabelText("Period A");
@@ -90,7 +102,7 @@ describe("FaceChange", () => {
       status: "insufficient",
       analysis_version: "face-shape-v1",
       metric: trend.metric,
-      coverage: { measured_photos: 3, required: 6 },
+      coverage: { measured_photos: 12, eligible_days: 3, required: 6 },
       points: [],
       events: [],
     }), { status: 200, headers: { "Content-Type": "application/json" } })));
