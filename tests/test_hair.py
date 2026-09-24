@@ -15,6 +15,7 @@ from selfietl.pipeline.hair import (
     _canvas_assets,
     _signed_distance,
     create_hair_export,
+    hair_playback_path,
     hair_metrics,
     mask_iou,
     project_hair_revision,
@@ -189,14 +190,31 @@ def test_hair_export_writes_browser_compatible_mp4(tmp_path):
     mask_b[12:56, 24:76] = True
     config, db, project_id = _project(tmp_path, [mask_a, mask_b])
     payload = {"start_date": None, "end_date": None, "seconds_per_selfie": 0.25, "width": 360, "height": 450}
+    previous_id = create_hair_export(db, config, project_id, payload)
+    previous_output = config.exports_dir / f"hair-timeline-{project_id}-{previous_id}.mp4"
+    previous_output.write_bytes(b"previous-hair-video")
+    db.execute(
+        "UPDATE hair_exports SET status = 'done', output_path = ? WHERE id = ?",
+        (str(previous_output), previous_id),
+    )
+    previous_playback = config.hair_playback_dir / f"hair-export-{previous_id}.mp4"
+    previous_playback.parent.mkdir(parents=True, exist_ok=True)
+    previous_playback.write_bytes(b"previous-playback")
     export_id = create_hair_export(db, config, project_id, payload)
 
     result = render_hair_export(db, config, project_id, export_id, payload)
     row = db.fetchone("SELECT * FROM hair_exports WHERE id = ?", (export_id,))
+    previous_row = db.fetchone("SELECT status, output_path FROM hair_exports WHERE id = ?", (previous_id,))
 
     assert result["frames"] > 2
     assert row["status"] == "done"
+    assert Path(row["output_path"]) == config.exports_dir / f"hair-timeline-{project_id}.mp4"
     assert Path(row["output_path"]).read_bytes()[4:8] == b"ftyp"
+    assert not previous_output.exists()
+    assert not previous_playback.exists()
+    assert previous_row["status"] == "replaced"
+    assert previous_row["output_path"] is None
+    assert hair_playback_path(config, project_id) == config.hair_playback_dir / f"hair-timeline-{project_id}.mp4"
 
 
 def test_hair_migration_is_idempotent(tmp_path):

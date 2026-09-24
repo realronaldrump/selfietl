@@ -22,6 +22,7 @@ from selfietl.pipeline.hair import (
     create_hair_export,
     create_haircut_event,
     ensure_hair_composite,
+    hair_playback_path,
     get_project_hair,
     recompute_project_hair,
     render_hair_export,
@@ -165,8 +166,11 @@ def export_playback(
     config: AppConfig = Depends(get_config),
 ):
     source = _export_path(export_id, db)
-    output = config.hair_playback_dir / f"hair-export-{export_id}.mp4"
-    if not output.exists() or output.stat().st_mtime < source.stat().st_mtime:
+    row = db.fetchone("SELECT project_id FROM hair_exports WHERE id = ?", (export_id,))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Hair export is not ready")
+    output = hair_playback_path(config, int(row["project_id"]))
+    if not output.exists() or output.stat().st_mtime <= source.stat().st_mtime:
         _write_playback(source, output)
     return FileResponse(output, media_type="video/mp4")
 
@@ -199,4 +203,3 @@ def _write_playback(source: Path, output: Path) -> None:
         temporary.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"Could not build hair playback video: {completed.stderr.decode(errors='replace').strip()}")
     temporary.replace(output)
-

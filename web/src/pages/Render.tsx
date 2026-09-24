@@ -30,6 +30,7 @@ const defaultConfig: RenderConfig = {
   codec: "h264",
   crf: 18,
   output_path: null,
+  preview: false,
 };
 
 export function Render({ project }: { project: Project }) {
@@ -41,7 +42,10 @@ export function Render({ project }: { project: Project }) {
   const historyQuery = useQuery({ queryKey: ["renders", project.id], queryFn: () => api.renders(project.id) });
   const jobsQuery = useQuery({ queryKey: ["jobs"], queryFn: api.jobs, refetchInterval: 1200 });
   const statsQuery = useQuery({ queryKey: ["stats", project.id], queryFn: () => api.stats(project.id) as Promise<RenderStats> });
-  const latestDone = useMemo(() => historyQuery.data?.find((render) => render.status === "done"), [historyQuery.data]);
+  const latestDone = useMemo(
+    () => historyQuery.data?.find((render) => render.status === "done" && render.config?.preview !== true),
+    [historyQuery.data],
+  );
   const activeDates = useMemo(
     () => (statsQuery.data?.timeline ?? []).filter((item) => !item.skipped).map((item) => item.date),
     [statsQuery.data],
@@ -75,6 +79,7 @@ export function Render({ project }: { project: Project }) {
       intermediate_frames: 0,
       fps: 15,
       crf: 24,
+      preview: true,
     };
   }
 

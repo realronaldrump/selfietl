@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import subprocess
 import urllib.request
@@ -32,6 +33,7 @@ DEFAULT_FPS = 30
 
 Progress = Callable[[str, int, int, str], None]
 CancelCheck = Callable[[], None]
+logger = logging.getLogger(__name__)
 
 
 def ensure_hair_model(config: AppConfig) -> Path:
@@ -644,9 +646,9 @@ def render_hair_export(
     ]
     if len(rows) < 2:
         raise RuntimeError("At least two included hair frames are required")
-    output = config.exports_dir / f"hair-timeline-{project_id}-{export_id}.mp4"
+    output = _hair_output_path(config, project_id)
     output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output.with_suffix(".tmp.mp4")
+    temporary = output.with_name(f".{output.stem}.export-{export_id}.tmp.mp4")
     command = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", str(DEFAULT_FPS), "-i", "-",
@@ -698,6 +700,7 @@ def render_hair_export(
             "UPDATE hair_exports SET output_path = ?, status = 'done', finished_at = ?, error = NULL WHERE id = ?",
             (str(output), now, export_id),
         )
+        _replace_previous_hair_exports(db, config, project_id, export_id, output)
         return {"export_id": export_id, "output_path": str(output), "frames": written}
     except Exception as exc:
         if process.poll() is None:
@@ -708,6 +711,57 @@ def render_hair_export(
             (f"{exc.__class__.__name__}: {exc}", datetime.now().isoformat(sep=" "), export_id),
         )
         raise
+
+
+def _hair_output_path(config: AppConfig, project_id: int) -> Path:
+    return config.exports_dir / f"hair-timeline-{project_id}.mp4"
+
+
+def hair_playback_path(config: AppConfig, project_id: int) -> Path:
+    return config.hair_playback_dir / f"hair-timeline-{project_id}.mp4"
+
+
+def _replace_previous_hair_exports(
+    db: Database,
+    config: AppConfig,
+    project_id: int,
+    current_export_id: int,
+    current_output_path: Path,
+) -> None:
+    rows = db.fetchall(
+        "SELECT id, output_path FROM hair_exports WHERE project_id = ? AND status = 'done' AND id <> ?",
+        (project_id, current_export_id),
+    )
+    current_path = current_output_path.expanduser().absolute()
+    replaced_ids: list[int] = []
+    for row in rows:
+        export_id = int(row["id"])
+        try:
+            previous_text = row["output_path"]
+            if previous_text:
+                previous_path = Path(previous_text).expanduser().absolute()
+                if previous_path != current_path:
+                    previous_path.unlink(missing_ok=True)
+            legacy_playback = config.hair_playback_dir / f"hair-export-{export_id}.mp4"
+            legacy_playback.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning("Could not remove replaced hair export %s: %s", export_id, exc)
+            continue
+        replaced_ids.append(export_id)
+
+    try:
+        hair_playback_path(config, project_id).unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("Could not remove cached hair playback for project %s: %s", project_id, exc)
+
+    if replaced_ids:
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE hair_exports SET status = 'replaced', output_path = NULL WHERE id IN ({})".format(
+                    ",".join("?" for _ in replaced_ids)
+                ),
+                tuple(replaced_ids),
+            )
 
 
 def ensure_hair_composite(db: Database, config: AppConfig, photo_hash: str) -> Path:

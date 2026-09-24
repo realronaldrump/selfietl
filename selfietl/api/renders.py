@@ -20,7 +20,7 @@ from selfietl.pipeline.compose import create_render_row, mark_render_failed, ren
 
 router = APIRouter(tags=["renders"])
 
-TERMINAL_RENDER_STATUSES = {"done", "failed", "cancelled"}
+TERMINAL_RENDER_STATUSES = {"done", "failed", "cancelled", "replaced", "removed"}
 DEFAULT_CLEANUP_STATUSES = {"failed", "cancelled"}
 
 

@@ -33,6 +33,7 @@ DEFAULT_RENDER_CONFIG = {
     "color_normalize": False,
     "codec": "h264",
     "crf": 20,
+    "preview": False,
     "date_overlay": {
         "enabled": True,
         "format": "%B %-d, %Y",
@@ -43,7 +44,7 @@ DEFAULT_RENDER_CONFIG = {
 }
 
 logger = logging.getLogger("selfietl.scheduler")
-SIGNATURE_VERSION = 1
+SIGNATURE_VERSION = 2
 _SETTINGS_LOCK = threading.RLock()
 
 
@@ -302,10 +303,7 @@ def kick_off_auto_render(
                     cancel_check=cancel_check,
                 )
             result = render_project(db, config, project_id, render_config, render_id, progress, cancel_check)
-            latest_hair = db.fetchone(
-                "SELECT config_json FROM hair_exports WHERE project_id = ? AND status = 'done' ORDER BY id DESC LIMIT 1",
-                (project_id,),
-            )
+            latest_hair = latest_hair_export_config(db, project_id)
             if latest_hair:
                 try:
                     hair_config = json.loads(latest_hair["config_json"])
@@ -461,6 +459,13 @@ def project_has_active_photos(db: Database, project_id: int) -> bool:
         (project_id,),
     )
     return bool(row and int(row["n"] or 0) > 0)
+
+
+def latest_hair_export_config(db: Database, project_id: int):
+    return db.fetchone(
+        "SELECT config_json FROM hair_exports WHERE project_id = ? ORDER BY id DESC LIMIT 1",
+        (project_id,),
+    )
 
 
 def _record_auto_render_attempt(config: AppConfig, render_id: int, attempt_at: datetime) -> None:

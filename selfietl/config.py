@@ -74,6 +74,10 @@ class RenderConfig(BaseModel):
     codec: Literal["h264", "h265"] = "h264"
     crf: int = Field(default=18, ge=0, le=51)
     output_path: str | None = None
+    preview: bool = Field(
+        default=False,
+        description="Keep range previews separate from final video outputs.",
+    )
 
     @field_validator("start_date", "end_date")
     @classmethod

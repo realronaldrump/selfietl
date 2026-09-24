@@ -66,6 +66,8 @@ When the scheduler fires it first fingerprints the active photo set, the saved r
 
 The scheduler records a render as successful only after the MP4 finishes. It records unchanged-input checks separately so the nightly loop waits until the next day without implying a new video was produced. If the mini PC was offline at the scheduled time, or a build fails, it will catch up after startup and retry later instead of silently skipping changed inputs.
 
+Each project keeps one completed timelapse, one range preview, and one Hair timeline. A successful render atomically replaces the prior video of the same kind; older render records remain without links to deleted files. Quick previews and playback copies use replaceable project-scoped paths.
+
 Trigger an immediate render from the UI's *Render now* button or via:
 
 ```bash

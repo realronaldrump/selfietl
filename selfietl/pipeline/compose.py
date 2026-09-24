@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+import logging
 import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from datetime import datetime, time as datetime_time
 from pathlib import Path
 from typing import Callable
@@ -21,6 +24,7 @@ from selfietl.pipeline.overlay import draw_date_overlay
 
 Progress = Callable[[str, int, int, str], None]
 CancelCheck = Callable[[], None]
+logger = logging.getLogger(__name__)
 
 
 def render_project(
@@ -58,8 +62,12 @@ def render_project(
             raise RuntimeError("No included photos match this date range")
         raise RuntimeError("No included photos are available to create a video")
 
-    output_path = Path(render_config.output_path).expanduser() if render_config.output_path else _default_output_path(config)
+    if render_config.preview:
+        output_path = _preview_output_path(config, project_id, render_config.output_path)
+    else:
+        output_path = Path(render_config.output_path).expanduser() if render_config.output_path else _default_output_path(config, project_id)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_output_path = _temporary_output_path(output_path, render_id)
     work_dir = config.render_cache_dir / f"render_{render_id}"
     if work_dir.exists():
         shutil.rmtree(work_dir)
@@ -117,7 +125,9 @@ def render_project(
 
         if progress:
             progress("ffmpeg", 0, 1, "Assembling video with FFmpeg")
-        _run_ffmpeg(frames_dir, output_path, render_config, frame_index - 1, cancel_check=cancel_check)
+        _run_ffmpeg(frames_dir, temporary_output_path, render_config, frame_index - 1, cancel_check=cancel_check)
+        check_cancel()
+        temporary_output_path.replace(output_path)
 
         finished_at = datetime.now().isoformat(sep=" ")
         with db.connect() as conn:
@@ -125,10 +135,12 @@ def render_project(
                 "UPDATE renders SET output_path = ?, finished_at = ?, status = ? WHERE id = ?",
                 (str(output_path), finished_at, "done", render_id),
             )
+        _replace_previous_render_outputs(db, config, project_id, render_id, output_path, preview=render_config.preview)
         if progress:
             progress("ffmpeg", 1, 1, "Export complete")
         return {"output_path": str(output_path), "frames": frame_index - 1}
     finally:
+        temporary_output_path.unlink(missing_ok=True)
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
@@ -183,8 +195,13 @@ def quick_preview(db: Database, config: AppConfig, project_id: int) -> Path:
             image.thumbnail((960, 960), Image.Resampling.LANCZOS)
             image = prepare_frame(image, preview_config, _parse_datetime(row["captured_at"]))
             _save_frame(frames_dir, idx, image)
-        output = config.exports_dir / f"preview_project_{project_id}.mp4"
-        _run_ffmpeg(frames_dir, output, preview_config, len(rows))
+        output = config.exports_dir / f"quick_preview_project_{project_id}.mp4"
+        temporary_output = _temporary_output_path(output, f"preview-{uuid.uuid4().hex}")
+        try:
+            _run_ffmpeg(frames_dir, temporary_output, preview_config, len(rows))
+            temporary_output.replace(output)
+        finally:
+            temporary_output.unlink(missing_ok=True)
         return output
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
@@ -512,6 +529,73 @@ def _parse_date_boundary(value: str | None, is_end: bool) -> datetime | None:
     return _parse_datetime(text)
 
 
-def _default_output_path(config: AppConfig) -> Path:
-    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    return config.exports_dir / f"timelapse_{stamp}.mp4"
+def _default_output_path(config: AppConfig, project_id: int, *, preview: bool = False) -> Path:
+    if preview:
+        return config.exports_dir / f"timelapse_preview_{project_id}.mp4"
+    return config.exports_dir / f"timelapse_{project_id}.mp4"
+
+
+def _preview_output_path(config: AppConfig, project_id: int, requested_path: str | None) -> Path:
+    if not requested_path:
+        return _default_output_path(config, project_id, preview=True)
+    requested = Path(requested_path).expanduser()
+    suffix = requested.suffix or ".mp4"
+    return requested.with_name(f"{requested.stem}.preview{suffix}")
+
+
+def _temporary_output_path(output_path: Path, render_id: str | int) -> Path:
+    suffix = output_path.suffix or ".mp4"
+    return output_path.with_name(f".{output_path.stem}.render-{render_id}.tmp{suffix}")
+
+
+def _replace_previous_render_outputs(
+    db: Database,
+    config: AppConfig,
+    project_id: int,
+    current_render_id: int,
+    current_output_path: Path,
+    *,
+    preview: bool,
+) -> None:
+    rows = db.fetchall(
+        "SELECT id, output_path, config_json FROM renders WHERE project_id = ? AND status = 'done' AND id <> ?",
+        (project_id, current_render_id),
+    )
+    current_path = current_output_path.expanduser().absolute()
+    replaced_ids: list[int] = []
+    for row in rows:
+        if _is_preview_config(row["config_json"]) != preview:
+            continue
+        render_id = int(row["id"])
+        try:
+            previous_text = row["output_path"]
+            if previous_text:
+                previous_path = Path(previous_text).expanduser().absolute()
+                if previous_path != current_path:
+                    previous_path.unlink(missing_ok=True)
+            cache_dir = config.render_cache_dir / f"render_{render_id}"
+            if cache_dir.exists():
+                shutil.rmtree(cache_dir)
+        except OSError as exc:
+            logger.warning("Could not remove replaced render %s: %s", render_id, exc)
+            continue
+        replaced_ids.append(render_id)
+
+    if replaced_ids:
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE renders SET status = 'replaced', output_path = NULL WHERE id IN ({})".format(
+                    ",".join("?" for _ in replaced_ids)
+                ),
+                tuple(replaced_ids),
+            )
+
+
+def _is_preview_config(config_json: str | None) -> bool:
+    try:
+        payload = json.loads(config_json or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    return bool(payload.get("preview", False))

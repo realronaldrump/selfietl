@@ -126,6 +126,7 @@ export type RenderConfig = {
   codec: "h264" | "h265";
   crf: number;
   output_path?: string | null;
+  preview: boolean;
 };
 
 export type PathResponse = {

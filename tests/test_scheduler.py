@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta
 
 from selfietl.config import load_config
@@ -8,6 +9,7 @@ from selfietl.scheduler import (
     auto_render_has_pending_changes,
     default_settings,
     load_settings,
+    latest_hair_export_config,
     next_run_at,
     primary_project_id,
     render_config_from_settings,
@@ -137,6 +139,21 @@ def test_auto_render_signature_tracks_photos_and_settings(tmp_path):
     settings.render_config["fps"] = 30
     _insert_active_photo(db, project_id, "hash2", "2026-05-08 10:00:00")
     assert auto_render_has_pending_changes(db, config, project_id, settings) is True
+
+
+def test_removed_hair_export_keeps_config_for_next_nightly_rebuild(tmp_path):
+    config = load_config(tmp_path / "home")
+    db = Database(config.db_path)
+    project_id = _insert_project(db, config)
+    payload = {"seconds_per_selfie": 0.75, "width": 720, "height": 900}
+    db.execute(
+        "INSERT INTO hair_exports (project_id, analysis_revision, config_json, started_at, status) VALUES (?, ?, ?, ?, 'removed')",
+        (project_id, "revision", json.dumps(payload), datetime.now().isoformat(sep=" ")),
+    )
+
+    row = latest_hair_export_config(db, project_id)
+
+    assert json.loads(row["config_json"]) == payload
 
 
 def test_streak_summary_counts_consecutive_days(tmp_path):

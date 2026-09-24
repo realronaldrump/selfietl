@@ -371,10 +371,11 @@ def today_status(
         )
         if rows:
             today_photo = _photo_payload(rows[0])
-        latest = db.fetchone(
-            "SELECT * FROM renders WHERE project_id = ? AND status = 'done' ORDER BY finished_at DESC LIMIT 1",
+        render_rows = db.fetchall(
+            "SELECT * FROM renders WHERE project_id = ? AND status = 'done' ORDER BY finished_at DESC",
             (project_id,),
         )
+        latest = next((row for row in render_rows if not _render_is_preview(row)), None)
         if latest:
             latest_render = _render_payload(latest)
         project_row = db.fetchone(
@@ -545,3 +546,13 @@ def _render_payload(row) -> dict[str, Any]:
         "output_path": row["output_path"],
         "video_url": f"/api/renders/{int(row['id'])}/file" if row["status"] == "done" else None,
     }
+
+
+def _render_is_preview(row) -> bool:
+    try:
+        config = json.loads(row["config_json"] or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(config, dict):
+        return False
+    return bool(config.get("preview", False))

@@ -37,7 +37,7 @@ export function History({ project }: { project: Project }) {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h2 className="text-xl font-black text-ink">Video history</h2>
-            <p className="mt-1 text-sm font-medium text-ink/55">Finished MP4 files stay on disk. This page keeps the path so you can find them again.</p>
+            <p className="mt-1 text-sm font-medium text-ink/55">The latest full render and range preview stay on disk. Earlier render records remain here without their MP4 files.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button type="button" size="sm" variant="secondary" disabled={failedCount === 0 || cleanupMutation.isPending} onClick={clearFailed}>
@@ -75,7 +75,13 @@ export function History({ project }: { project: Project }) {
 
 function RenderRow({ projectId, render }: { projectId: number; render: Render }) {
   const queryClient = useQueryClient();
-  const tone = render.status === "done" ? "good" : render.status === "failed" ? "bad" : render.status === "cancelled" ? "warn" : "default";
+  const tone = render.status === "done"
+    ? "good"
+    : render.status === "failed"
+      ? "bad"
+      : ["cancelled", "replaced", "removed"].includes(render.status)
+        ? "warn"
+        : "default";
   const deleteMutation = useMutation({
     mutationFn: () => api.deleteRender(render.id, { deleteFile: true, deleteCache: true }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["renders", projectId] }),
