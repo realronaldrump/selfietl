@@ -23,7 +23,7 @@ from selfietl.pipeline.canonical import canonical_pixels
 
 
 ALGORITHM_VERSION = "hair-v2"
-DETECTION_VERSION = "haircuts-v2"
+DETECTION_VERSION = "haircuts-v3"
 SEGMENTATION_VERSION = "hair-segmenter-float32-1"
 HAIR_MODEL_NAME = "hair_segmenter.tflite"
 HAIR_MODEL_URL = (
@@ -802,7 +802,7 @@ def update_haircut_suggestions(db: Database, config: AppConfig, project_id: int,
     masks = {row["hash"]: _comparison_mask(config, row) for row in rows}
     rows = [row for row in rows if masks[row["hash"]] is not None]
     dates = [date.fromisoformat(str(row["captured_at"])[:10]) for row in rows]
-    protected = db.fetchall("SELECT event_date FROM haircut_events WHERE project_id = ? AND status IN ('confirmed', 'dismissed')", (project_id,))
+    protected = db.fetchall("SELECT id, event_date, status, evidence_json FROM haircut_events WHERE project_id = ? AND status IN ('confirmed', 'dismissed')", (project_id,))
     protected_dates = [date.fromisoformat(row["event_date"]) for row in protected]
     changes: list[tuple[int, float]] = []
     candidates: list[dict[str, Any]] = []
@@ -818,7 +818,7 @@ def update_haircut_suggestions(db: Database, config: AppConfig, project_id: int,
             continue
         baseline = [row for at, row in enumerate(rows[max(0, index - 3):index], start=max(0, index - 3))
                     if (dates[index] - dates[at]).days <= 21 and _comparable_photos(row, new)]
-        if len(baseline) < 2 or any(abs((dates[index] - day).days) <= 10 for day in protected_dates):
+        if len(baseline) < 2:
             continue
         before = np.mean([masks[row["hash"]] for row in baseline], axis=0) > 0.5
         old_area = int(before.sum())
@@ -830,6 +830,12 @@ def update_haircut_suggestions(db: Database, config: AppConfig, project_id: int,
         old_extent = float(np.median([sum(float(_json_dict(row["metrics_json"]).get(key, 0)) for key in extent_keys) for row in baseline]))
         new_extent = sum(float(_json_dict(new["metrics_json"]).get(key, 0)) for key in extent_keys)
         extent_drop = 1.0 - new_extent / max(old_extent, 1e-6)
+        before_regions = {key: float(np.median([_json_dict(row["metrics_json"]).get(key, 0) for row in baseline])) for key in ("side_area", "crown_area")}
+        regional_losses = {key: 1 - float(_json_dict(new["metrics_json"]).get(key, before_regions[key])) / before_regions[key]
+                           for key in before_regions if before_regions[key] >= 0.1}
+        region = max(regional_losses, key=regional_losses.get) if regional_losses else None
+        regional_drop = regional_losses.get(region, 0)
+        regional_candidate = regional_drop >= 0.20 and area_drop >= 0.08
         removed = float(np.logical_and(before, ~new_mask).sum()) / old_area
         added = float(np.logical_and(~before, new_mask).sum()) / old_area
         center = float(np.median(history)) if len(history) >= 4 else 0.0
@@ -837,13 +843,15 @@ def update_haircut_suggestions(db: Database, config: AppConfig, project_id: int,
         threshold = max(0.16, center + 3.0 * scale)
         # A contraction must beat recent styling noise, with more disappearing
         # hair than new pixels elsewhere. Shifted/reshaped hair alone is insufficient.
-        if area_drop < 0.10 or (extent_drop < 0.045 and area_drop < 0.20) or removed < 0.14 or removed < 2.2 * added:
+        if (area_drop < 0.10 and not regional_candidate) or (extent_drop < 0.025 and area_drop < 0.20 and not regional_candidate) or removed < 0.14 or removed < 2.2 * added:
             continue
         future = [row for at, row in enumerate(rows[index + 1:index + 4], start=index + 1)
                   if (dates[at] - dates[index]).days <= 21 and _comparable_photos(row, new)]
         persistent = [row for row in future
                       if float(masks[row["hash"]].sum()) <= old_area * (1.0 - max(0.06, area_drop * 0.45))
-                      and mask_iou(new_mask, masks[row["hash"]]) >= mask_iou(before, masks[row["hash"]]) + 0.035]
+                      and mask_iou(new_mask, masks[row["hash"]]) >= mask_iou(before, masks[row["hash"]]) + (0.01 if regional_candidate else 0.035)]
+        regional_followers = [row for row in persistent if region and
+                              float(_json_dict(row["metrics_json"]).get(region, before_regions[region])) <= before_regions[region] * 0.90]
         if len(persistent) >= 2:
             status = "suggested"
             # Repeated independent dates provide more evidence than a single
@@ -856,9 +864,12 @@ def update_haircut_suggestions(db: Database, config: AppConfig, project_id: int,
             status = "provisional"
         else:
             continue
-        if change < threshold:
+        regional_support = regional_candidate and len(regional_followers) >= 2 and change >= 0.16
+        if change < threshold and not regional_support:
             continue
         score = round((change - center) / max(scale, 0.05), 3)
+        if regional_support:
+            score = max(score, round(regional_drop / 0.20, 3))
         evidence = {
             "algorithm_version": ALGORITHM_VERSION,
             "detection_version": DETECTION_VERSION,
@@ -872,15 +883,28 @@ def update_haircut_suggestions(db: Database, config: AppConfig, project_id: int,
             "extent_drop_percent": round(extent_drop * 100, 1),
             "shape_change": round(change, 4),
             "noise_threshold": round(threshold, 4),
+            "evidence_kind": "regional_contraction" if regional_support else "shape_change",
+            "region": region,
+            "regional_drop_percent": round(regional_drop * 100, 1),
         }
         candidates.append({"hash": new["hash"], "date": dates[index], "score": score, "status": status, "evidence": evidence})
     # Adjacent drops can describe the same cut. Keep one supported boundary.
     selected: list[dict[str, Any]] = []
-    for candidate in sorted(candidates, key=lambda item: (item["status"] == "suggested", item["score"]), reverse=True):
+    confirmed_evidence: list[tuple[int, str]] = []
+    for candidate in sorted(candidates, key=lambda item: (item["status"] != "suggested", item["date"], -item["score"])):
+        for decision in protected:
+            if decision["status"] == "confirmed" and candidate["status"] == "suggested" and candidate["evidence"]["earliest_date"] <= decision["event_date"] <= candidate["evidence"]["latest_date"]:
+                encoded = json.dumps(candidate["evidence"], sort_keys=True, separators=(",", ":"))
+                if decision["evidence_json"] != encoded:
+                    confirmed_evidence.append((int(decision["id"]), encoded))
+        if any(abs((candidate["date"] - day).days) <= 10 for day in protected_dates):
+            continue
         if all(abs((candidate["date"] - other["date"]).days) > 10 for other in selected):
             selected.append(candidate)
     now = datetime.now().isoformat(sep=" ")
     with db.connect() as conn:
+        for event_id, evidence in confirmed_evidence:
+            conn.execute("UPDATE haircut_events SET evidence_json = ?, updated_at = ? WHERE id = ?", (evidence, now, event_id))
         existing = {row["first_after_photo_hash"]: row for row in conn.execute(
             "SELECT * FROM haircut_events WHERE project_id = ? AND source = 'automatic'", (project_id,)).fetchall()}
         for item in selected:

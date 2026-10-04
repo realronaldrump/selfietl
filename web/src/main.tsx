@@ -4,6 +4,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import "./index.css";
 
+if (new URLSearchParams(window.location.hash.slice(1)).has("access")) {
+  window.history.replaceState(null, "", window.location.pathname + window.location.search);
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {

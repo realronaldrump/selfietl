@@ -218,7 +218,7 @@ function HaircutRow({ event, today, onUpdate, updating }: { event: HaircutEvent;
         {event.status !== "confirmed" && evidence.earliest_date && evidence.latest_date ? <p className="mt-1 text-xs text-ink/60">{evidence.earliest_date === evidence.latest_date ? "Change first seen on this date." : `Between ${compactDate(evidence.earliest_date)} and ${compactDate(evidence.latest_date)}.`}{event.status === "provisional" ? " Waiting for more photos." : ""}</p> : null}
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-2">
-        {event.status !== "confirmed" && evidence.before_photo_hash && evidence.after_photo_hash ? <Button variant="ghost" onClick={() => setReviewing(!reviewing)} aria-expanded={reviewing}>{reviewing ? "Hide photos" : "Review photos"}</Button> : null}
+        {evidence.before_photo_hash && evidence.after_photo_hash ? <Button variant="ghost" onClick={() => setReviewing(!reviewing)} aria-expanded={reviewing}>{reviewing ? "Hide photos" : "Review photos"}</Button> : null}
         <Input aria-label={`Date for haircut ${event.id}`} type="date" max={today} value={draftDate} onChange={(e) => setDraftDate(e.target.value)} className="max-w-full sm:w-auto" />
         {draftDate !== event.event_date ? <Button variant="secondary" disabled={updating || !valid} onClick={() => onUpdate(event.id, { event_date: draftDate })}>Save date</Button> : null}
         {event.status !== "confirmed" ? <Button size="icon" aria-label="Confirm haircut" disabled={updating || !valid} onClick={() => onUpdate(event.id, { status: "confirmed", event_date: draftDate })}><Check className="h-4 w-4" /></Button> : null}
@@ -226,8 +226,8 @@ function HaircutRow({ event, today, onUpdate, updating }: { event: HaircutEvent;
       </div>
     </div>
     {reviewing && evidence.before_photo_hash && evidence.after_photo_hash ? <div className="mt-3 grid max-w-xl grid-cols-2 gap-3">
-      <figure><img loading="lazy" src={apiUrl(`/api/photos/${evidence.before_photo_hash}/image`)} alt="Selfie before the possible haircut" className="aspect-[3/4] w-full rounded object-cover" /><figcaption className="mt-1 text-xs text-ink/60">Before</figcaption></figure>
-      <figure><img loading="lazy" src={apiUrl(`/api/photos/${evidence.after_photo_hash}/image`)} alt="Selfie after the possible haircut" className="aspect-[3/4] w-full rounded object-cover" /><figcaption className="mt-1 text-xs text-ink/60">After</figcaption></figure>
+      <figure><img loading="lazy" src={apiUrl(`/api/photos/${evidence.before_photo_hash}/image`)} alt={`Selfie before ${event.status === "confirmed" ? "the haircut" : "the possible haircut"}`} className="aspect-[3/4] w-full rounded object-cover" /><figcaption className="mt-1 text-xs text-ink/60">Before</figcaption></figure>
+      <figure><img loading="lazy" src={apiUrl(`/api/photos/${evidence.after_photo_hash}/image`)} alt={`Selfie after ${event.status === "confirmed" ? "the haircut" : "the possible haircut"}`} className="aspect-[3/4] w-full rounded object-cover" /><figcaption className="mt-1 text-xs text-ink/60">After</figcaption></figure>
     </div> : null}
   </div>;
 }

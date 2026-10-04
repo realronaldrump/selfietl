@@ -584,3 +584,37 @@ def test_new_haircut_proposals_do_not_invalidate_a_completed_video(tmp_path):
     assert create_hair_export(db, config, project_id, payload) == export_id
     db.execute("UPDATE haircut_events SET status = 'confirmed'")
     assert get_project_hair(db, config, project_id)["latest_export"]["stale"]
+
+
+def test_regional_trim_uses_repeated_side_loss_and_keeps_first_observed_day(tmp_path):
+    # A modest side trim, with crown styling noise and a larger drop the next
+    # day, should retain the first supported boundary.
+    before = np.zeros((120, 100), dtype=bool)
+    before[8:36, 28:72] = True
+    before[36:68, 20:40] = True
+    before[36:68, 60:80] = True
+    after = np.zeros_like(before)
+    after[8:36, 32:76] = True
+    after[36:68, 25:40] = True
+    after[36:68, 60:75] = True
+    shorter = after.copy(); shorter[36:68, 25:29] = False; shorter[36:68, 71:75] = False
+    shifts = [6,-6,10,0,-10,5,-1,10,4,-8,7,0,0,0]
+    masks = [np.roll(before, shift, axis=1) for shift in shifts] + [after, shorter, shorter, shorter]
+    config, db, project_id = _project(tmp_path, masks)
+    assert update_haircut_suggestions(db, config, project_id) == 1
+    event = db.fetchone("SELECT * FROM haircut_events")
+    assert event["first_after_photo_hash"] == "hair-14"
+    assert json.loads(event["evidence_json"])["evidence_kind"] == "regional_contraction"
+
+
+def test_confirmed_dates_keep_their_identity_and_gain_matching_photo_evidence(tmp_path):
+    from selfietl.pipeline.hair import create_haircut_event
+    long, short = _shapes()
+    config, db, project_id = _project(tmp_path, [long,long,short,short,short])
+    known = create_haircut_event(db, project_id, "2024-01-07")
+    assert update_haircut_suggestions(db, config, project_id) == 0
+    event = db.fetchone("SELECT * FROM haircut_events")
+    assert event["id"] == known["id"]
+    assert event["source"] == "manual" and event["status"] == "confirmed"
+    assert event["event_date"] == "2024-01-07"
+    assert json.loads(event["evidence_json"])["after_photo_hash"] == "hair-2"

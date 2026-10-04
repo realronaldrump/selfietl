@@ -28,6 +28,8 @@ A candidate needs at least two preceding comparable days, sufficient loss of vis
 
 Nearby boundaries are consolidated. Confirmed and dismissed decisions are preserved. Unsupported automatic suggestions are removed, including when no eligible measurements remain. Stored evidence includes the before/after photos, observation interval, number of supporting days, and contraction measurements. The score measures deviation from recent variation; it is not a calibrated probability. The observed interval is shown because the first short-haired selfie does not establish the exact haircut date.
 
+`haircuts-v3` also checks regional contractions: a reduction of at least 20% in crown or side area, with a smaller overall outline and two later dates retaining at least a 10% reduction in that same region. This catches side trims whose crown styling makes whole-mask overlap noisy. It still requires disappearing hair to exceed newly appearing hair and compatible photos. Consolidation keeps the earliest supported boundary, rather than moving a cut to a later photo with a larger drop. Confirmed records can gain matching before/after evidence without changing their dates or source.
+
 ## Display and export
 
 The elapsed-time counter uses calendar dates, including leap days and daylight-saving transitions. It counts from the latest confirmed, nonfuture haircut. Haircuts can be added before any segmentation is available. Future dates are rejected, and repeated additions of an already confirmed date are idempotent.
