@@ -60,12 +60,18 @@ class AccessKeys:
         with sqlite3.connect(self.database) as connection:
             connection.execute("CREATE TABLE IF NOT EXISTS used_tickets (nonce TEXT PRIMARY KEY, expires INTEGER NOT NULL)")
         self.database.chmod(0o600)
+        self.code_path = directory / "remote-access-code"
 
     def issue(self, kind: str, lifetime: int) -> str:
         payload = _encode(json.dumps({"kind": kind, "exp": int(time.time()) + lifetime, "nonce": secrets.token_urlsafe(24)}, separators=(",", ":")).encode())
         return payload + "." + _encode(hmac.digest(self.secret, payload.encode(), "sha256"))
 
     def owner_code(self) -> str:
+        if self.code_path.exists():
+            code = self.code_path.read_text().strip()
+            if not code:
+                raise ValueError("Remote access code is empty")
+            return code
         return _encode(hmac.digest(self.secret, b"SelfieTL owner access", "sha256"))
 
     def verify(self, token: str, kind: str) -> dict | None:
