@@ -1,0 +1,12 @@
+[Unit]
+Description=Protected SelfieTL HTTPS gateway
+After=network-online.target
+
+[Service]
+WorkingDirectory=/home/davis/selfietl
+ExecStart=/home/davis/selfietl/.venv/bin/python -m selfietl.remote_access serve --public-origin https://davis-mini-pc-1.tail59b3f5.ts.net:10000/selfietl/ --data-dir /home/davis/.selfietl --port 8777
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -61,3 +61,45 @@ def test_gateway_protects_api_media_and_proxy_preserves_ranges(tmp_path):
         assert request("POST", "/auth/session", body)[0] == 401
     finally:
         server.shutdown(); server.server_close(); upstream.shutdown(); upstream.server_close()
+
+
+def test_mounted_gateway_uses_its_own_login_path_cookie_and_throttle(tmp_path):
+    keys = AccessKeys(tmp_path)
+    keys.code_path.write_text("test-owner-code")
+    server = GatewayServer(
+        ("127.0.0.1", 0), keys,
+        "https://selfietl.example.com:10000/selfietl/", "http://127.0.0.1:8766",
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    def request(method, path, token=None, origin="https://selfietl.example.com:10000"):
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+        # Funnel removes the mount path before forwarding to the gateway.
+        body = json.dumps({"token": token}) if token is not None else None
+        connection.request(method, path, body, {
+            "Host": "selfietl.example.com:10000", "Origin": origin,
+        })
+        response = connection.getresponse()
+        result = response.status, dict(response.getheaders()), response.read()
+        connection.close()
+        return result
+
+    try:
+        status, _, html = request("GET", "/")
+        assert status == 200 and b'"/selfietl/auth/session"' in html
+        assert b"/selfietl/" in html
+        assert request("POST", "/auth/session", "test-owner-code", "https://other.example")[0] == 403
+        status, headers, _ = request("POST", "/auth/session", "test-owner-code")
+        assert status == 200
+        assert headers["Set-Cookie"].startswith("__Secure-selfietl_session=")
+        assert "Path=/selfietl/;" in headers["Set-Cookie"]
+        assert "Domain=" not in headers["Set-Cookie"]
+        for _ in range(4):
+            assert request("POST", "/auth/session", "incorrect")[0] == 401
+        status, headers, body = request("POST", "/auth/session", "incorrect")
+        assert status == 429 and int(headers["Retry-After"]) > 0
+        assert b"Too many" in body
+        assert request("GET", "/api/projects")[0] == 401
+    finally:
+        server.shutdown()
+        server.server_close()

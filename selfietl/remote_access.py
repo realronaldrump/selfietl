@@ -1,6 +1,6 @@
 """Authenticated HTTPS gateway for the local SelfieTL server.
 
-The gateway listens only on loopback and is published by Cloudflare Tunnel.
+The gateway listens only on loopback and is published on SelfieTL's HTTPS route.
 Login links contain a short-lived, single-use ticket in the URL fragment.
 """
 from __future__ import annotations
@@ -13,10 +13,12 @@ import json
 import os
 import secrets
 import sqlite3
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import deque
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -27,9 +29,10 @@ MAX_UPLOAD = 260 * 1024 * 1024
 HOP_HEADERS = {"connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "proxy-authenticate", "proxy-authorization"}
 LOGIN_HTML = """<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SelfieTL</title>
 <style>body{font:16px system-ui;background:#f2f3f0;color:#171917;margin:0;display:grid;min-height:100vh;place-items:center}main{box-sizing:border-box;background:white;padding:28px;border:1px solid #ddd;border-radius:12px;width:min(420px,90vw)}h1{margin:0 0 20px}input,button{box-sizing:border-box;width:100%;font:inherit;padding:12px;border-radius:6px;margin:8px 0;border:1px solid #bbb}button{background:#171917;color:white;border:0}p{line-height:1.5}#error{color:#b73320}</style>
-<main><h1>SelfieTL</h1><p id="message">Use your private sign-in link or enter an access code.</p><form id="form"><input name="username" value="Davis" autocomplete="username" hidden><label for="code">Access code</label><input id="code" type="password" autocomplete="current-password" required><button id="submit">Sign in</button></form><p id="error" role="alert"></p></main>
+<main><h1>SelfieTL</h1><p id="message">Enter your access code.</p><form id="form"><input name="username" value="Davis" autocomplete="username" hidden><label for="code">Access code</label><input id="code" type="password" autocomplete="current-password" required><button id="submit">Sign in</button></form><p id="error" role="alert"></p></main>
 <script nonce="__NONCE__">const form=document.getElementById('form'),code=document.getElementById('code'),error=document.getElementById('error');
-async function login(token){document.getElementById('submit').disabled=true;try{const r=await fetch('/auth/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token})});if(!r.ok)throw new Error('This sign-in link has expired or was already used.');location.replace(location.pathname+location.search)}catch(e){error.textContent=e.message;document.getElementById('submit').disabled=false}}
+const basePath=__BASE_PATH__;if(basePath&&location.pathname===basePath)location.replace(basePath+'/'+location.search+location.hash);
+async function login(token){document.getElementById('submit').disabled=true;try{const r=await fetch(__SESSION_PATH__,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token})});if(!r.ok)throw new Error(r.status===429?'Too many attempts. Try again in a minute.':'Access code or sign-in link not recognized.');location.replace(location.pathname+location.search)}catch(e){error.textContent=e.message;document.getElementById('submit').disabled=false}}
 form.addEventListener('submit',e=>{e.preventDefault();login(code.value.trim())});const ticket=new URLSearchParams(location.hash.slice(1)).get('access');if(ticket){history.replaceState(null,'',location.pathname+location.search);document.getElementById('message').textContent='Signing in…';login(ticket)}</script></html>"""
 
 
@@ -109,15 +112,36 @@ class GatewayServer(ThreadingHTTPServer):
 
     def __init__(self, address, keys: AccessKeys, origin: str, upstream: str):
         parsed = urllib.parse.urlsplit(origin)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.path not in ("", "/"):
-            raise ValueError("Public origin must be an HTTPS hostname")
+        if (parsed.scheme != "https" or not parsed.hostname
+                or parsed.path.rstrip("/") not in ("", "/selfietl")
+                or parsed.username or parsed.password or parsed.query or parsed.fragment):
+            raise ValueError("Public origin must be HTTPS with an optional /selfietl path")
         target = urllib.parse.urlsplit(upstream)
         if target.scheme != "http" or target.hostname not in ("127.0.0.1", "localhost"):
             raise ValueError("Upstream must be a local HTTP server")
-        self.keys, self.origin, self.upstream = keys, origin.rstrip("/"), upstream.rstrip("/")
+        self.keys, self.upstream = keys, upstream.rstrip("/")
+        self.origin = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+        self.base_path = parsed.path.rstrip("/")
+        self.cookie_name = "__Secure-selfietl_session" if self.base_path else COOKIE
         self.hostname = parsed.netloc.lower()
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        self.login_attempts: deque[float] = deque()
+        self.login_lock = threading.Lock()
         super().__init__(address, GatewayHandler)
+
+    def login_retry_after(self) -> int:
+        # One owner and a short access code: cap attempts across clients too.
+        with self.login_lock:
+            now = time.monotonic()
+            while self.login_attempts and self.login_attempts[0] <= now - 60:
+                self.login_attempts.popleft()
+            if len(self.login_attempts) >= 5:
+                return max(1, int(self.login_attempts[0] + 60 - now) + 1)
+            self.login_attempts.append(now)
+            return 0
+
+    def session_cookie(self, token: str, lifetime: int = SESSION_SECONDS) -> str:
+        return f"{self.cookie_name}={token}; Path={self.base_path}/; Secure; HttpOnly; SameSite=Lax; Max-Age={lifetime}"
 
 
 class GatewayHandler(BaseHTTPRequestHandler):
@@ -128,13 +152,15 @@ class GatewayHandler(BaseHTTPRequestHandler):
         # Login credentials and signed cookies must never appear in access logs.
         pass
 
-    def _reply(self, status: int, body: bytes, content_type="application/json", cookie: str | None = None, nonce: str | None = None):
+    def _reply(self, status: int, body: bytes, content_type="application/json", cookie: str | None = None, nonce: str | None = None, retry_after: int | None = None):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self._security_headers(nonce)
         if cookie:
             self.send_header("Set-Cookie", cookie)
+        if retry_after:
+            self.send_header("Retry-After", str(retry_after))
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -182,6 +208,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 self.close_connection = True
                 self._reply(413, b'{"detail":"Invalid sign-in request"}')
                 return
+            retry_after = server.login_retry_after()
+            if retry_after:
+                self.close_connection = True
+                self._reply(429, b'{"detail":"Too many sign-in attempts. Try again in a minute."}', retry_after=retry_after)
+                return
             try:
                 request = json.loads(self.rfile.read(length))
                 session = server.keys.redeem(request.get("token", ""))
@@ -190,12 +221,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
             if session is None:
                 self._reply(401, b'{"detail":"Invalid or expired sign-in link"}')
                 return
-            cookie = f"{COOKIE}={session}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age={SESSION_SECONDS}"
-            self._reply(200, b'{"ok":true}', cookie=cookie)
+            self._reply(200, b'{"ok":true}', cookie=server.session_cookie(session))
             return
         try:
             cookies = SimpleCookie(self.headers.get("Cookie", ""))
-            session = cookies[COOKIE].value if COOKIE in cookies else ""
+            session = cookies[server.cookie_name].value if server.cookie_name in cookies else ""
         except Exception:
             session = ""
         session_data = server.keys.verify(session, "session")
@@ -203,12 +233,15 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.close_connection = True
             if self.command in ("GET", "HEAD") and not path.startswith(("/api/", "/assets/")) and path not in ("/sw.js", "/manifest.webmanifest"):
                 nonce = secrets.token_urlsafe(18)
-                self._reply(200, LOGIN_HTML.replace("__NONCE__", nonce).encode(), "text/html; charset=utf-8", nonce=nonce)
+                html = (LOGIN_HTML.replace("__NONCE__", nonce)
+                        .replace("__BASE_PATH__", json.dumps(server.base_path))
+                        .replace("__SESSION_PATH__", json.dumps(server.base_path + "/auth/session")))
+                self._reply(200, html.encode(), "text/html; charset=utf-8", nonce=nonce)
             else:
                 self._reply(401, b'{"detail":"Sign in to SelfieTL"}')
             return
         if path == "/auth/logout" and self.command == "POST":
-            self._reply(200, b'{"ok":true}', cookie=f"{COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0")
+            self._reply(200, b'{"ok":true}', cookie=server.session_cookie("", 0))
             return
         body = self.rfile.read(length) if length else None
         headers = {name: self.headers[name] for name in ("Content-Type", "Accept", "Range", "If-None-Match", "If-Modified-Since", "Last-Event-ID") if name in self.headers}
@@ -227,7 +260,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 self._security_headers()
                 if session_data["exp"] - time.time() < SESSION_SECONDS / 2:
                     renewed = server.keys.issue("session", SESSION_SECONDS)
-                    self.send_header("Set-Cookie", f"{COOKIE}={renewed}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age={SESSION_SECONDS}")
+                    self.send_header("Set-Cookie", server.session_cookie(renewed))
                 chunked = upstream.headers.get("Content-Length") is None and self.command != "HEAD" and upstream.code not in (204, 304)
                 if chunked:
                     self.send_header("Transfer-Encoding", "chunked")

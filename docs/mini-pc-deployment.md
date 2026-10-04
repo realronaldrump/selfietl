@@ -119,21 +119,29 @@ To watch the daily pipeline live:
 sudo journalctl -u selfietl.service -f | grep -E 'auto_render|capture'
 ```
 
-## Normal HTTPS access
+## Independent remote access
 
-`https://selfietl.everystreet.me/` uses the existing Cloudflare tunnel and a dedicated authenticated gateway on `127.0.0.1:8777`. It works through ordinary public DNS, independently of Tailscale DNS and Safari Private Relay. The original private Tailscale URL and native-app connection remain available.
+Open `https://davis-mini-pc-1.tail59b3f5.ts.net:10000/selfietl/`. This is a public HTTPS route protected by SelfieTL's access code. It works without a Tailscale client or private DNS. The mini PC provides TLS through Tailscale Funnel; SelfieTL has a separate route and authentication gateway. It uses no domain, Cloudflare tunnel, authentication, or application service from another project.
 
-The gateway checks authentication before forwarding API, image, and video requests to `127.0.0.1:8766`. Its signing key and consumed login tickets stay in the SelfieTL data directory with mode `0600`. Login links carry short-lived, single-use tickets in the URL fragment. Sessions use a Secure, HttpOnly, host-only cookie, and state-changing requests check the origin. Browser responses do not cache private data. The owner access code is derived from the private signing key and can be saved in the browser's password manager.
+The gateway's user service is `selfietl-remote-access.service`, listening only on `127.0.0.1:8777` and forwarding to the SelfieTL backend on `127.0.0.1:8766`. Its unit template is in `deploy/selfietl-remote-access.service`. Enable user lingering so the gateway starts at boot. The original private Tailscale endpoint remains available to the native client.
 
-The user service is `selfietl-remote-access.service`. The hostname's Cloudflare ingress rule targets this gateway, never the unprotected backend. Keep access codes, login links, cookies, and signing keys out of source control and public reports.
+Add only SelfieTL's Funnel mount; retain existing routes:
+
+```bash
+tailscale funnel --bg --https=10000 --set-path=/selfietl/ http://127.0.0.1:8777
+```
+
+Funnel removes the mount prefix before proxying. Configure the gateway's `--public-origin` with the full public `/selfietl/` address so the login form and session cookie stay within that route. The `--bg` configuration persists across reboot. Do not expose port `8766` through Funnel.
+
+The gateway checks authentication for API, images, and video. Its signing key, access-code override, and consumed login tickets stay in the SelfieTL data directory with private permissions. Login links use short-lived, single-use tickets in the URL fragment. Sessions use a Secure, HttpOnly, host-only cookie scoped to `/selfietl/`, and state-changing requests check the origin. Browser responses do not cache private data. The gateway permits at most five sign-in attempts per minute; existing authenticated sessions continue normally.
 
 Issue a private sign-in link on the mini PC:
 
 ```bash
 cd /home/davis/selfietl
 .venv/bin/python -m selfietl.remote_access issue-link \
-  --public-origin https://selfietl.everystreet.me \
+  --public-origin https://davis-mini-pc-1.tail59b3f5.ts.net:10000/selfietl/ \
   --data-dir /home/davis/.selfietl
 ```
 
-Use `show-code` in place of `issue-link` to retrieve the owner's permanent access code locally.
+Use `show-code` in place of `issue-link` to retrieve the owner's configured access code locally. Keep access codes, login links, cookies, and signing keys out of source control and public reports.
