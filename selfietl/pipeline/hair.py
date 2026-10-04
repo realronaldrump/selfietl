@@ -23,6 +23,7 @@ from selfietl.pipeline.canonical import canonical_pixels
 
 
 ALGORITHM_VERSION = "hair-v2"
+DETECTION_VERSION = "haircuts-v2"
 SEGMENTATION_VERSION = "hair-segmenter-float32-1"
 HAIR_MODEL_NAME = "hair_segmenter.tflite"
 HAIR_MODEL_URL = (
@@ -131,6 +132,20 @@ def analyze_photo_hair(
     source_path = config.hair_source_masks_dir / f"{photo_hash}.npz"
     confidence: np.ndarray | None = None
     reasons: list[str] = []
+    capture_reasons = []
+    if any(row[key] is not None and (not math.isfinite(float(row[key])) or abs(float(row[key])) > limit)
+           for key, limit in (("yaw", 20), ("pitch", 20), ("roll", 25))):
+        capture_reasons.append("head_pose")
+    if row["quality_score"] is not None and (not math.isfinite(float(row["quality_score"])) or float(row["quality_score"]) < 0.6):
+        capture_reasons.append("low_photo_quality")
+    if not force and existing and existing["algorithm_version"] == ALGORITHM_VERSION and existing["source_signature"] == signature:
+        aligned_landmarks = config.aligned_landmarks_dir / f"{photo_hash}.npz"
+        canonical = db.fetchone("SELECT p.canonical_landmarks_path FROM projects p JOIN project_photos pp ON pp.project_id = p.id WHERE pp.photo_hash = ? ORDER BY p.id LIMIT 1", (photo_hash,))
+        canonical_path = Path(canonical["canonical_landmarks_path"]) if canonical and canonical["canonical_landmarks_path"] else None
+        previous_reasons = _json_list(existing["reasons_json"])
+        alignment_current = aligned_landmarks.exists() and alignment_signature(aligned_landmarks) == existing["alignment_signature"] and (not canonical_path or not canonical_path.exists() or canonical_path.stat().st_mtime_ns <= aligned_landmarks.stat().st_mtime_ns)
+        if alignment_current and source_path.exists() and existing["aligned_mask_path"] and Path(existing["aligned_mask_path"]).exists() and "hair_analysis_failed" not in previous_reasons and set(capture_reasons) == set(previous_reasons).intersection({"head_pose", "low_photo_quality"}):
+            return {"hash": photo_hash, "eligible": bool(existing["eligible"]), "quality": existing["quality_score"], "reasons": previous_reasons, "cached": True}
 
     if not force and source_path.exists():
         try:
@@ -189,12 +204,7 @@ def analyze_photo_hair(
         reasons.append("alignment_crops_hair")
     if metrics.get("alignment_anisotropy", 1.0) > 1.08:
         reasons.append("alignment_distorts_hair")
-    for key, limit in (("yaw", 20), ("pitch", 20), ("roll", 25)):
-        if row[key] is not None and (not math.isfinite(float(row[key])) or abs(float(row[key])) > limit):
-            reasons.append("head_pose")
-            break
-    if row["quality_score"] is not None and float(row["quality_score"]) < 0.6:
-        reasons.append("low_photo_quality")
+    reasons.extend(capture_reasons)
     reasons = list(dict.fromkeys(reasons))
     eligible = bool(refined.any()) and bool(metrics) and not BLOCKING_REASONS.intersection(reasons)
     now = datetime.now().isoformat(sep=" ")
@@ -610,11 +620,18 @@ def get_project_hair(db: Database, config: AppConfig, project_id: int) -> dict[s
     latest = db.fetchone("SELECT * FROM hair_exports WHERE project_id = ? AND status = 'done' ORDER BY id DESC LIMIT 1", (project_id,))
     latest_export = None
     if latest and latest["output_path"] and Path(latest["output_path"]).exists():
+        media_revision = project_hair_media_revision(db, config, project_id)
+        stored_media_revision = latest["media_revision"]
+        if stored_media_revision is None and latest["analysis_revision"] == revision:
+            # A completed legacy export whose full input snapshot still matches
+            # can safely adopt the narrower video fingerprint.
+            stored_media_revision = media_revision
+            db.execute("UPDATE hair_exports SET media_revision = ? WHERE id = ?", (media_revision, latest["id"]))
         export_config = _json_dict(latest["config_json"])
         latest_export = {
             "id": int(latest["id"]),
             "status": latest["status"],
-            "stale": latest["analysis_revision"] != revision,
+            "stale": stored_media_revision != media_revision,
             "file_url": f"/api/hair-exports/{latest['id']}/file",
             "playback_url": f"/api/hair-exports/{latest['id']}/playback.mp4",
             "finished_at": str(latest["finished_at"]) if latest["finished_at"] else None,
@@ -820,7 +837,7 @@ def update_haircut_suggestions(db: Database, config: AppConfig, project_id: int,
         threshold = max(0.16, center + 3.0 * scale)
         # A contraction must beat recent styling noise, with more disappearing
         # hair than new pixels elsewhere. Shifted/reshaped hair alone is insufficient.
-        if change < threshold or area_drop < 0.10 or (extent_drop < 0.045 and area_drop < 0.20) or removed < 0.14 or removed < 2.2 * added:
+        if area_drop < 0.10 or (extent_drop < 0.045 and area_drop < 0.20) or removed < 0.14 or removed < 2.2 * added:
             continue
         future = [row for at, row in enumerate(rows[index + 1:index + 4], start=index + 1)
                   if (dates[at] - dates[index]).days <= 21 and _comparable_photos(row, new)]
@@ -829,13 +846,22 @@ def update_haircut_suggestions(db: Database, config: AppConfig, project_id: int,
                       and mask_iou(new_mask, masks[row["hash"]]) >= mask_iou(before, masks[row["hash"]]) + 0.035]
         if len(persistent) >= 2:
             status = "suggested"
+            # Repeated independent dates provide more evidence than a single
+            # noisy daily comparison. Keep the conservative single-photo
+            # threshold for provisional changes, but account for both windows
+            # when the contraction is supported after the candidate date.
+            noise_factor = math.sqrt(0.5 * (1 / len(baseline) + 1 / (1 + len(persistent))))
+            threshold = max(0.16, center + 3.0 * scale * noise_factor)
         elif len(future) < 2 and len(persistent) == len(future):
             status = "provisional"
         else:
             continue
+        if change < threshold:
+            continue
         score = round((change - center) / max(scale, 0.05), 3)
         evidence = {
             "algorithm_version": ALGORITHM_VERSION,
+            "detection_version": DETECTION_VERSION,
             "before_photo_hash": baseline[-1]["hash"],
             "after_photo_hash": new["hash"],
             "earliest_date": (dates[index - 1] + timedelta(days=1)).isoformat(),
@@ -890,8 +916,22 @@ def normalized_hair_export(payload: dict[str, Any]) -> dict[str, Any]:
             "width": int(payload.get("width", DEFAULT_WIDTH)), "height": int(payload.get("height", DEFAULT_HEIGHT))}
 
 
+def project_hair_media_revision(db: Database, config: AppConfig, project_id: int) -> str:
+    digest = hashlib.sha256(ALGORITHM_VERSION.encode())
+    for row in _daily_hair_rows(_hair_rows(db, project_id, include_excluded=True)):
+        for key in ("hash", "captured_at", "eligible", "user_excluded", "source_signature", "alignment_signature"):
+            digest.update(str(row[key]).encode())
+        for name in (row["path"], row["landmarks_path"], row["aligned_mask_path"], row["canonical_landmarks_path"]):
+            path = Path(name) if name else None
+            if path and path.exists():
+                stat = path.stat(); digest.update(f"{stat.st_size}|{stat.st_mtime_ns}".encode())
+    for row in db.fetchall("SELECT DISTINCT event_date FROM haircut_events WHERE project_id = ? AND status = 'confirmed' ORDER BY event_date", (project_id,)):
+        digest.update(row["event_date"].encode())
+    return digest.hexdigest()
+
+
 def reusable_hair_export(db: Database, project_id: int, revision: str, payload: dict[str, Any]):
-    for row in db.fetchall("SELECT * FROM hair_exports WHERE project_id = ? AND analysis_revision = ? AND status = 'done' ORDER BY id DESC", (project_id, revision)):
+    for row in db.fetchall("SELECT * FROM hair_exports WHERE project_id = ? AND media_revision = ? AND status = 'done' ORDER BY id DESC", (project_id, revision)):
         if normalized_hair_export(_json_dict(row["config_json"])) != normalized_hair_export(payload) or not row["output_path"]:
             continue
         try:
@@ -905,13 +945,14 @@ def reusable_hair_export(db: Database, project_id: int, revision: str, payload: 
 
 def create_hair_export(db: Database, config: AppConfig, project_id: int, payload: dict[str, Any]) -> int:
     revision = project_hair_revision(db, config, project_id)
-    existing = reusable_hair_export(db, project_id, revision, payload)
+    media_revision = project_hair_media_revision(db, config, project_id)
+    existing = reusable_hair_export(db, project_id, media_revision, payload)
     if existing:
         return int(existing["id"])
     now = datetime.now().isoformat(sep=" ")
     return db.execute(
-        "INSERT INTO hair_exports (project_id, analysis_revision, config_json, started_at, status) VALUES (?, ?, ?, ?, 'queued')",
-        (project_id, revision, json.dumps(payload, separators=(",", ":")), now),
+        "INSERT INTO hair_exports (project_id, analysis_revision, media_revision, config_json, started_at, status) VALUES (?, ?, ?, ?, ?, 'queued')",
+        (project_id, revision, media_revision, json.dumps(payload, separators=(",", ":")), now),
     )
 
 
@@ -924,7 +965,7 @@ def render_hair_export(
     progress: Progress | None = None,
     cancel_check: CancelCheck | None = None,
 ) -> dict[str, Any]:
-    existing = reusable_hair_export(db, project_id, project_hair_revision(db, config, project_id), payload)
+    existing = reusable_hair_export(db, project_id, project_hair_media_revision(db, config, project_id), payload)
     if existing and int(existing["id"]) == export_id:
         if progress:
             progress("hair_export", 1, 1, "Video is already up to date")

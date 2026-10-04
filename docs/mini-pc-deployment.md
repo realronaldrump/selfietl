@@ -118,3 +118,22 @@ To watch the daily pipeline live:
 ```bash
 sudo journalctl -u selfietl.service -f | grep -E 'auto_render|capture'
 ```
+
+## Normal HTTPS access
+
+`https://selfietl.everystreet.me/` uses the existing Cloudflare tunnel and a dedicated authenticated gateway on `127.0.0.1:8777`. It works through ordinary public DNS, independently of Tailscale DNS and Safari Private Relay. The original private Tailscale URL and native-app connection remain available.
+
+The gateway checks authentication before forwarding API, image, and video requests to `127.0.0.1:8766`. Its signing key and consumed login tickets stay in the SelfieTL data directory with mode `0600`. Login links carry short-lived, single-use tickets in the URL fragment. Sessions use a Secure, HttpOnly, host-only cookie, and state-changing requests check the origin. Browser responses do not cache private data. The owner access code is derived from the private signing key and can be saved in the browser's password manager.
+
+The user service is `selfietl-remote-access.service`. The hostname's Cloudflare ingress rule targets this gateway, never the unprotected backend. Keep access codes, login links, cookies, and signing keys out of source control and public reports.
+
+Issue a private sign-in link on the mini PC:
+
+```bash
+cd /home/davis/selfietl
+.venv/bin/python -m selfietl.remote_access issue-link \
+  --public-origin https://selfietl.everystreet.me \
+  --data-dir /home/davis/.selfietl
+```
+
+Use `show-code` in place of `issue-link` to retrieve the owner's permanent access code locally.

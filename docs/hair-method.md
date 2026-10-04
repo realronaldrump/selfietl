@@ -24,7 +24,7 @@ One eligible, included photo per calendar day is chosen consistently for the man
 
 Comparison masks use a fixed eye-centered, scale- and roll-normalized coordinate system. Comparisons require compatible camera metadata and head pose, and a gap of no more than 21 days.
 
-A candidate needs at least two preceding comparable days, sufficient loss of visible area and extent, and substantially more disappearing hair than newly appearing hair. Shape change must exceed a robust threshold based on recent median change and median absolute deviation. Two later, distinct days within 21 days must retain the shorter shape before the candidate becomes a suggestion. A recent uncontradicted change with less follow-up remains provisional. Reversals, equal-area styling changes, camera switches, and long gaps do not satisfy these rules.
+A candidate needs at least two preceding comparable days, sufficient loss of visible area and extent, and substantially more disappearing hair than newly appearing hair. Shape change must exceed a robust threshold based on recent median change and median absolute deviation. Supported changes account for the number of distinct days in the before/after windows; provisional changes retain the single-observation threshold. Two later, distinct days within 21 days must retain the shorter shape before the candidate becomes a suggestion. A recent uncontradicted change with less follow-up remains provisional. Reversals, equal-area styling changes, camera switches, and long gaps do not satisfy these rules.
 
 Nearby boundaries are consolidated. Confirmed and dismissed decisions are preserved. Unsupported automatic suggestions are removed, including when no eligible measurements remain. Stored evidence includes the before/after photos, observation interval, number of supporting days, and contraction measurements. The score measures deviation from recent variation; it is not a calibrated probability. The observed interval is shown because the first short-haired selfie does not establish the exact haircut date.
 
@@ -34,7 +34,7 @@ The elapsed-time counter uses calendar dates, including leap days and daylight-s
 
 Outline change compares median areas from up to three comparable days within 21 days after the confirmed haircut against up to three recent days within 14 days of the latest eligible selfie. Each window needs at least two days and must not overlap. Unsupported comparisons stay unavailable.
 
-Video ranges and exports use the same dates relative to the latest archived selfie. Exports include one selected photo per day, validate ranges and even dimensions, and preserve project-scoped atomic video replacement. Segmentation/version/source/alignment changes and newly added photos invalidate the export revision.
+Video ranges and exports use the same dates relative to the latest archived selfie. Exports include one selected photo per day, validate ranges and even dimensions, and preserve project-scoped atomic video replacement. Segmentation/source/alignment changes, included photos, and confirmed haircut markers invalidate the video fingerprint. Automatic suggestions and measurement timestamps do not invalidate a completed video. Fresh measurements are reused during rechecks.
 
 Opening the page or changing its range never starts a video render. Videos are created with the explicit button or by the nightly scheduler. Identical completed requests reuse the existing file, and simultaneous identical requests share one job.
 

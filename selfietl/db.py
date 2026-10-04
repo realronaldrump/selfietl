@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS hair_exports (
     id INTEGER PRIMARY KEY,
     project_id INT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     analysis_revision TEXT NOT NULL,
+    media_revision TEXT,
     config_json TEXT NOT NULL,
     output_path TEXT,
     started_at TIMESTAMP NOT NULL,
@@ -175,6 +176,7 @@ class Database:
             _ensure_column(conn, "face_shape_profiles", "trend_json", "TEXT")
             _ensure_column(conn, "face_shape_profiles", "trend_cache_key", "TEXT")
             _ensure_column(conn, "haircut_events", "evidence_json", "TEXT NOT NULL DEFAULT '{}'")
+            _ensure_column(conn, "hair_exports", "media_revision", "TEXT")
 
     def fetchone(self, query: str, params: tuple[Any, ...] = ()) -> sqlite3.Row | None:
         with self.connect() as conn:

@@ -542,3 +542,45 @@ def test_concurrent_identical_export_requests_share_one_job(tmp_path, monkeypatc
         assert first.status_code == second.status_code == 200
         assert first.json()["job_id"] == second.json()["job_id"]
         assert len(db.fetchall("SELECT * FROM hair_exports")) == 1
+
+
+def test_cached_rechecks_do_not_change_measurements_or_video_revision(tmp_path, monkeypatch):
+    from selfietl.pipeline import hair
+    _, mask = _shapes()
+    config, db, project_id = _project(tmp_path, [mask, mask])
+    before = project_hair_revision(db, config, project_id)
+    monkeypatch.setattr(hair, "_write_aligned_mask", lambda *a: (_ for _ in ()).throw(AssertionError("Fresh masks must not be regenerated")))
+    result = hair.recompute_project_hair(db, config, project_id)
+    assert result["processed"] == 2 and result["failed"] == 0
+    assert project_hair_revision(db, config, project_id) == before
+
+
+def test_supported_cut_is_detected_despite_high_single_day_styling_noise(tmp_path):
+    long, _ = _shapes()
+    # Equal-area styling shifts vary daily, followed by a stable baseline and
+    # a smaller shape that remains visible on several later dates.
+    shifts = [6, -6, 10, 0, -10, 5, -1, 10, 4, -8, 7, 0, 0, 0]
+    trimmed = np.zeros_like(long)
+    trimmed[12:68, 18:82] = True
+    masks = [np.roll(long, shift, axis=1) for shift in shifts] + [trimmed] * 4
+    config, db, project_id = _project(tmp_path, masks)
+    assert update_haircut_suggestions(db, config, project_id) == 1
+    event = db.fetchone("SELECT * FROM haircut_events")
+    assert event["first_after_photo_hash"] == "hair-14"
+    evidence = json.loads(event["evidence_json"])
+    assert evidence["following_days"] >= 2
+    assert evidence["area_drop_percent"] > 30
+
+
+def test_new_haircut_proposals_do_not_invalidate_a_completed_video(tmp_path):
+    from selfietl.pipeline.hair import get_project_hair
+    _, mask = _shapes()
+    config, db, project_id = _project(tmp_path, [mask, mask])
+    payload = {"width": 360, "height": 450, "seconds_per_selfie": .25}
+    export_id = create_hair_export(db, config, project_id, payload)
+    render_hair_export(db, config, project_id, export_id, payload)
+    db.execute("INSERT INTO haircut_events (project_id,event_date,source,status,created_at,updated_at) VALUES (?,'2024-01-02','automatic','suggested','2024-01-02','2024-01-02')", (project_id,))
+    assert not get_project_hair(db, config, project_id)["latest_export"]["stale"]
+    assert create_hair_export(db, config, project_id, payload) == export_id
+    db.execute("UPDATE haircut_events SET status = 'confirmed'")
+    assert get_project_hair(db, config, project_id)["latest_export"]["stale"]
