@@ -38,6 +38,15 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("Hair", () => {
+  it("does not create videos when opening stale results or switching ranges", async () => {
+    manifest.latest_export!.stale = true;
+    renderPage();
+    await screen.findByRole("heading", { name: "Hair", level: 1 });
+    fireEvent.click(screen.getByRole("button", { name: "6 months" }));
+    await screen.findByRole("button", { name: "Create video" });
+    expect(vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url).endsWith("/hair/export") && init?.method === "POST")).toHaveLength(0);
+  });
+
   it("shows plain labels, the latest analysis date, and a reviewable suggestion", async () => {
     renderPage();
     expect(await screen.findByRole("heading", { name: "Hair", level: 1 })).toBeInTheDocument();

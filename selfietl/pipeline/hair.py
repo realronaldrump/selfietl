@@ -884,8 +884,30 @@ def mask_iou(a: np.ndarray | None, b: np.ndarray | None) -> float:
     return float(np.logical_and(a, b).sum() / union) if union else 1.0
 
 
+def normalized_hair_export(payload: dict[str, Any]) -> dict[str, Any]:
+    return {"start_date": payload.get("start_date") or None, "end_date": payload.get("end_date") or None,
+            "seconds_per_selfie": float(payload.get("seconds_per_selfie", 1)),
+            "width": int(payload.get("width", DEFAULT_WIDTH)), "height": int(payload.get("height", DEFAULT_HEIGHT))}
+
+
+def reusable_hair_export(db: Database, project_id: int, revision: str, payload: dict[str, Any]):
+    for row in db.fetchall("SELECT * FROM hair_exports WHERE project_id = ? AND analysis_revision = ? AND status = 'done' ORDER BY id DESC", (project_id, revision)):
+        if normalized_hair_export(_json_dict(row["config_json"])) != normalized_hair_export(payload) or not row["output_path"]:
+            continue
+        try:
+            with Path(row["output_path"]).open("rb") as stream:
+                if stream.read(8)[4:8] == b"ftyp":
+                    return row
+        except OSError:
+            continue
+    return None
+
+
 def create_hair_export(db: Database, config: AppConfig, project_id: int, payload: dict[str, Any]) -> int:
     revision = project_hair_revision(db, config, project_id)
+    existing = reusable_hair_export(db, project_id, revision, payload)
+    if existing:
+        return int(existing["id"])
     now = datetime.now().isoformat(sep=" ")
     return db.execute(
         "INSERT INTO hair_exports (project_id, analysis_revision, config_json, started_at, status) VALUES (?, ?, ?, ?, 'queued')",
@@ -902,6 +924,11 @@ def render_hair_export(
     progress: Progress | None = None,
     cancel_check: CancelCheck | None = None,
 ) -> dict[str, Any]:
+    existing = reusable_hair_export(db, project_id, project_hair_revision(db, config, project_id), payload)
+    if existing and int(existing["id"]) == export_id:
+        if progress:
+            progress("hair_export", 1, 1, "Video is already up to date")
+        return {"export_id": export_id, "output_path": existing["output_path"], "reused": True}
     start = payload.get("start_date")
     end = payload.get("end_date")
     seconds = float(payload.get("seconds_per_selfie", 1.0))

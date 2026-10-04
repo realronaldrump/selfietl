@@ -36,6 +36,8 @@ Outline change compares median areas from up to three comparable days within 21 
 
 Video ranges and exports use the same dates relative to the latest archived selfie. Exports include one selected photo per day, validate ranges and even dimensions, and preserve project-scoped atomic video replacement. Segmentation/version/source/alignment changes and newly added photos invalidate the export revision.
 
+Opening the page or changing its range never starts a video render. Videos are created with the explicit button or by the nightly scheduler. Identical completed requests reuse the existing file, and simultaneous identical requests share one job.
+
 ## Limits and validation
 
 Wet hair, products, hats, lighting, occlusion, and sustained styling changes can alter the silhouette without a haircut. Face-relative filtering and repeated observations reduce these errors but cannot eliminate them. Missing or inconsistent photos can hide a real haircut. The detector never confirms a haircut automatically.

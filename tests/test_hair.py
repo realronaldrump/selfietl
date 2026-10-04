@@ -499,3 +499,46 @@ def test_adding_known_cut_confirms_existing_same_date_suggestion(tmp_path):
     event = create_haircut_event(db, project_id, "2024-01-07")
     assert event["status"] == "confirmed"
     assert len(db.fetchall("SELECT * FROM haircut_events")) == 1
+
+
+def test_identical_completed_exports_are_reused_without_running_ffmpeg(tmp_path, monkeypatch):
+    from selfietl.pipeline import hair
+    _, mask = _shapes()
+    config, db, project_id = _project(tmp_path, [mask, mask])
+    payload = {"width": 360, "height": 450, "seconds_per_selfie": .25}
+    export_id = create_hair_export(db, config, project_id, payload)
+    render_hair_export(db, config, project_id, export_id, payload)
+    path = Path(db.fetchone("SELECT output_path FROM hair_exports WHERE id = ?", (export_id,))["output_path"])
+    timestamp = path.stat().st_mtime_ns
+    monkeypatch.setattr(hair.subprocess, "Popen", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("FFmpeg must not run again")))
+    reused_id = create_hair_export(db, config, project_id, payload)
+    result = render_hair_export(db, config, project_id, reused_id, payload)
+    assert reused_id == export_id
+    assert result["reused"] is True
+    assert path.stat().st_mtime_ns == timestamp
+    assert len(db.fetchall("SELECT * FROM hair_exports")) == 1
+
+
+def test_concurrent_identical_export_requests_share_one_job(tmp_path, monkeypatch):
+    import threading
+    from selfietl.jobs.runner import runner
+    from selfietl.api import hair as api_hair
+    _, mask = _shapes()
+    config, db, project_id = _project(tmp_path, [mask, mask])
+    hold = threading.Event()
+    started = threading.Event()
+    def render(*args, **kwargs):
+        started.set()
+        hold.wait(3)
+        return {"ok": True}
+    monkeypatch.setattr(api_hair, "render_hair_export", render)
+    runner.jobs.clear(); runner.resume_new_jobs()
+    with TestClient(create_app(config)) as client:
+        url = f"/api/projects/{project_id}/hair/export"
+        first = client.post(url, json={})
+        assert started.wait(1)
+        second = client.post(url, json={})
+        hold.set()
+        assert first.status_code == second.status_code == 200
+        assert first.json()["job_id"] == second.json()["job_id"]
+        assert len(db.fetchall("SELECT * FROM hair_exports")) == 1

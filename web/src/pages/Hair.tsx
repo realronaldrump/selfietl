@@ -13,7 +13,6 @@ export function Hair({ project }: { project?: Project | null }) {
   const activeProject = project === undefined ? projectsQuery.data?.[0] ?? null : project;
   const queryClient = useQueryClient();
   const recomputeAttempt = useRef<string | null>(null);
-  const exportAttempt = useRef<string | null>(null);
   const [range, setRange] = useState<Range>("all");
   const [speed, setSpeed] = useState(1);
   const [selectedHash, setSelectedHash] = useState<string | null>(null);
@@ -32,7 +31,6 @@ export function Hair({ project }: { project?: Project | null }) {
     setJobError(null);
     setManualDate(localDate());
     recomputeAttempt.current = null;
-    exportAttempt.current = null;
   }, [activeProject?.id]);
 
   const hairQuery = useQuery({
@@ -77,15 +75,6 @@ export function Hair({ project }: { project?: Project | null }) {
   useEffect(() => {
     if (videoRef.current) videoRef.current.playbackRate = playbackRate(matchingVideo?.config.seconds_per_selfie, speed);
   }, [speed, matchingVideo?.id, matchingVideo?.config.seconds_per_selfie]);
-
-  useEffect(() => {
-    if (!activeProject || !manifest || manifest.status !== "ready" || included.length < 2 || busy || jobError || exportMutation.isError) return;
-    if (matchingVideo && !matchingVideo.stale) return;
-    const key = `${activeProject.id}:${manifest.analysis_revision}:${payload.start_date}:${payload.end_date}`;
-    if (exportAttempt.current === key) return;
-    exportAttempt.current = key;
-    exportMutation.mutate({ ...payload, seconds_per_selfie: 1 });
-  }, [activeProject?.id, manifest, included.length, busy, jobError, matchingVideo, payload.start_date, payload.end_date, exportMutation.isError, exportMutation.mutate]);
 
   const frameMutation = useMutation({
     mutationFn: ({ hash, excluded }: { hash: string; excluded: boolean }) => api.updateHairFrame(hash, excluded),

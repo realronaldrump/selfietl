@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import uuid
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -29,6 +30,7 @@ from selfietl.pipeline.hair import (
     set_hair_excluded,
     update_haircut_event,
     update_haircut_suggestions,
+    normalized_hair_export,
 )
 
 
@@ -115,6 +117,13 @@ async def export_hair(
     config: AppConfig = Depends(get_config),
 ):
     _ensure_project(db, project_id)
+    config_payload = payload.model_dump(mode="json")
+    active_exports = db.fetchall("SELECT id, config_json FROM hair_exports WHERE project_id = ? AND status IN ('queued', 'running') ORDER BY id DESC", (project_id,))
+    for item in active_exports:
+        if normalized_hair_export(json.loads(item["config_json"])) == normalized_hair_export(config_payload):
+            job = next((j for j in runner.jobs.values() if j.name == f"hair_export:{item['id']}" and j.status in {"queued", "running"}), None)
+            if job:
+                return StartJobResponse(job_id=job.id, status_url=f"/api/jobs/{job.id}", events_url=f"/api/jobs/{job.id}/events")
     if runner.has_active_jobs():
         raise HTTPException(status_code=409, detail="Wait for the current job to finish before creating a video.")
     manifest = get_project_hair(db, config, project_id)
@@ -125,7 +134,6 @@ async def export_hair(
                 and (not payload.end_date or frame["date"] <= payload.end_date)]
     if len(included) < 2:
         raise HTTPException(status_code=400, detail="Select at least two included days for a video.")
-    config_payload = payload.model_dump(mode="json")
     export_id = create_hair_export(db, config, project_id, config_payload)
     try:
         job = runner.start(
