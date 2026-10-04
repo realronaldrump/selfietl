@@ -115,6 +115,7 @@ def test_batch_capture_preserves_cancellation_status(tmp_path: Path, monkeypatch
         started = client.post(
             "/api/capture/batch",
             files=[("files", ("selfie.jpg", contents, "image/jpeg"))],
+            data={"metadata": json.dumps([{"captured_at": "2026-05-08T14:30:00"}])},
         )
         assert started.status_code == 200
         job_id = started.json()["job_id"]

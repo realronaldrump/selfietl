@@ -77,6 +77,9 @@ def scan_project(
                 try:
                     width, height = image_dimensions(absolute)
                     meta = exif_metadata(absolute)
+                    if meta["captured_at"] is None:
+                        warnings.append({"path": str(absolute), "warning": "missing_capture_timestamp"})
+                        continue
                     phash = perceptual_hash(absolute)
                     if phash:
                         duplicate = conn.execute(

@@ -12,7 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, type CapturePreviewItem, type JobStatus } from "@/api/client";
-import { Badge, Button, Input, Label, PageFrame, Panel, ProgressBar, cn } from "@/components/ui";
+import { Badge, Button, Input, PageFrame, Panel, ProgressBar, cn } from "@/components/ui";
 import { useJobEvents } from "@/hooks/useJobEvents";
 
 type CaptureStep = "pick" | "preview" | "uploading" | "result";
@@ -171,7 +171,6 @@ export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => 
       setItems((current) =>
         current.map((item) => ({
           ...item,
-          capturedAtLocal: item.capturedAtLocal || datetimeToLocalInput(new Date()),
           metadataLoading: false,
           error: item.error ?? message,
         })),
@@ -484,10 +483,13 @@ function UploadReviewCard({
           </div>
 
           <div className="mt-3 min-w-0 space-y-1">
-            <Label>Assigned date and time</Label>
+            <label htmlFor={`capture-date-${item.id}`} className="text-xs font-black uppercase tracking-[0.14em] text-ink/55">
+              Original date and time
+            </label>
             <div className="relative min-w-0">
               <Calendar className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink/35" />
               <Input
+                id={`capture-date-${item.id}`}
                 type="datetime-local"
                 step={1}
                 value={item.capturedAtLocal}
@@ -496,6 +498,11 @@ function UploadReviewCard({
                 className="min-w-0 max-w-full pl-9 pr-2 text-[0.8125rem] sm:text-sm"
               />
             </div>
+            {!item.metadataLoading && !item.capturedAtLocal ? (
+              <p className="text-xs font-semibold leading-5 text-coral">
+                Enter this photo's original date and time to import it.
+              </p>
+            ) : null}
           </div>
 
           {item.cameraMake || item.cameraModel ? (
@@ -692,13 +699,12 @@ function applyPreviewItem(item: UploadItem, preview: CapturePreviewItem | undefi
   if (!preview) {
     return {
       ...item,
-      capturedAtLocal: item.capturedAtLocal || datetimeToLocalInput(new Date()),
       originalCapturedAtLocal: item.originalCapturedAtLocal,
       metadataLoading: false,
       error: item.error ?? "Metadata preview did not return this photo",
     };
   }
-  const capturedAtLocal = preview.captured_at ? isoLikeToLocalInput(preview.captured_at) : item.capturedAtLocal || datetimeToLocalInput(new Date());
+  const capturedAtLocal = preview.captured_at ? isoLikeToLocalInput(preview.captured_at) : item.capturedAtLocal;
   return {
     ...item,
     filename: preview.filename || item.filename,
@@ -797,6 +803,7 @@ function humanSkipReason(reason: string | null | undefined) {
 function humanWarning(warning: string) {
   const labels: Record<string, string> = {
     missing_datetime_original: "No original date",
+    missing_capture_timestamp: "Original date required",
     datetime_from_filename: "Date from filename",
     datetime_from_file_modified_time: "Date fallback",
     datetime_from_exif_datetime: "Date from EXIF",
@@ -835,20 +842,9 @@ function formatFileSize(bytes: number) {
 }
 
 function isoLikeToLocalInput(value: string) {
-  const normalized = value.replace(" ", "T");
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) return normalized.slice(0, 16);
-  return datetimeToLocalInput(date);
-}
-
-function datetimeToLocalInput(date: Date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  const h = String(date.getHours()).padStart(2, "0");
-  const min = String(date.getMinutes()).padStart(2, "0");
-  const sec = String(date.getSeconds()).padStart(2, "0");
-  return `${y}-${m}-${d}T${h}:${min}:${sec}`;
+  // Capture timestamps are source clock times, not instants to convert through
+  // the browser timezone (which can also normalize daylight-saving gaps).
+  return value.replace(" ", "T").slice(0, 19);
 }
 
 function datetimeLocalToIso(value: string) {

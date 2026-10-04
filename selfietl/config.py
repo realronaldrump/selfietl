@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import os
 import tomllib
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from selfietl.capture_dates import parse_capture_datetime
 
 
 class DetectionConfig(BaseModel):
@@ -86,7 +87,7 @@ class RenderConfig(BaseModel):
             return None
         text = value.strip()
         try:
-            datetime.fromisoformat(text.replace("Z", "+00:00"))
+            parse_capture_datetime(text)
         except ValueError as exc:
             raise ValueError("must be an ISO 8601 date or datetime") from exc
         return text
@@ -99,8 +100,8 @@ class RenderConfig(BaseModel):
     @model_validator(mode="after")
     def validate_date_order(self) -> "RenderConfig":
         if self.start_date and self.end_date:
-            start = _comparable_datetime(self.start_date)
-            end = _comparable_datetime(self.end_date)
+            start = parse_capture_datetime(self.start_date)
+            end = parse_capture_datetime(self.end_date)
             if start > end:
                 raise ValueError("start_date must be on or before end_date")
         return self
@@ -243,10 +244,3 @@ crf = 18
 pixel_format = "yuv420p"
 """
     config.config_path.write_text(text, encoding="utf-8")
-
-
-def _comparable_datetime(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
-    return parsed

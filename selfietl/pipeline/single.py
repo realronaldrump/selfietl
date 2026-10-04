@@ -8,6 +8,7 @@ from typing import Callable
 
 import numpy as np
 
+from selfietl.capture_dates import parse_capture_datetime
 from selfietl.config import AppConfig
 from selfietl.db import Database
 from selfietl.pipeline.align import align_photo, aligned_path
@@ -44,12 +45,14 @@ def import_to_inbox(
 
     Returns the absolute path of the saved file.
     """
+    if captured_at is None:
+        raise ValueError("Photo's original capture timestamp is required")
     inbox = config.data_dir / "inbox"
     inbox.mkdir(parents=True, exist_ok=True)
     suffix = Path(filename).suffix.lower()
     if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".tif", ".tiff"}:
         suffix = ".jpg"
-    stamp = (captured_at or datetime.now()).strftime("%Y-%m-%d_%H%M%S")
+    stamp = captured_at.strftime("%Y-%m-%d_%H%M%S")
     candidate = inbox / f"selfie_{stamp}{suffix}"
     counter = 1
     while candidate.exists():
@@ -94,8 +97,14 @@ def process_single_photo(
     already_cataloged = False
     with db.connect() as conn:
         existing = conn.execute("SELECT * FROM photos WHERE hash = ?", (photo_hash,)).fetchone()
+        if meta["captured_at"] is None:
+            if existing is None:
+                raise ValueError("Photo's original capture timestamp is required")
+            meta = _with_captured_at_override(meta, parse_capture_datetime(existing["captured_at"]))
         if existing is not None and _same_path(existing["path"], source_path):
             already_cataloged = True
+            # A retry must use the saved capture date, including catalog edits.
+            meta = _with_captured_at_override(meta, parse_capture_datetime(existing["captured_at"]))
             conn.execute(
                 "INSERT OR IGNORE INTO project_photos (project_id, photo_hash, added_at) VALUES (?, ?, ?)",
                 (project_id, photo_hash, datetime.now().isoformat(sep=" ")),
@@ -371,6 +380,7 @@ def _mark_other_active_captures_for_day(
 
 
 def _with_captured_at_override(meta: dict, captured_at: datetime) -> dict:
+    captured_at = parse_capture_datetime(captured_at)
     updated = dict(meta)
     warnings = list(updated.get("warnings") or [])
     original = updated.get("captured_at")
@@ -505,11 +515,9 @@ def _same_path(left: str | None, right: Path) -> bool:
 
 
 def _row_datetime(value: object) -> datetime | None:
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
+    if isinstance(value, (datetime, str)):
         try:
-            return datetime.fromisoformat(value)
+            return parse_capture_datetime(value)
         except ValueError:
             return None
     return None

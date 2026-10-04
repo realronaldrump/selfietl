@@ -13,8 +13,8 @@ def test_scan_is_idempotent_for_exact_duplicate_bytes(tmp_path: Path):
     source = tmp_path / "source"
     source.mkdir()
     image = Image.new("RGB", (64, 64), (20, 90, 130))
-    image.save(source / "a.jpg", "JPEG")
-    image.save(source / "b.jpg", "JPEG")
+    image.save(source / "2026-05-01_100000.jpg", "JPEG")
+    image.save(source / "2026-05-01_100000_2.jpg", "JPEG")
     config = load_config(data_dir)
     db = Database(config.db_path)
     project_id = create_project(db, "Test", str(source))

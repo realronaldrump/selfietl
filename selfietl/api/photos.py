@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from selfietl.api.deps import get_config, get_db
+from selfietl.capture_dates import parse_capture_datetime
 from selfietl.config import AppConfig
 from selfietl.db import Database
 from selfietl.models import PatchPhotoRequest, PhotoListResponse, PhotoResponse
@@ -54,7 +55,12 @@ def list_photos(
 
 
 @router.patch("/photos/{photo_hash}", response_model=PhotoResponse)
-def patch_photo(photo_hash: str, payload: PatchPhotoRequest, db: Database = Depends(get_db)):
+def patch_photo(
+    photo_hash: str,
+    payload: PatchPhotoRequest,
+    db: Database = Depends(get_db),
+    config: AppConfig = Depends(get_config),
+):
     row = db.fetchone("SELECT * FROM photos WHERE hash = ?", (photo_hash,))
     if row is None:
         raise HTTPException(status_code=404, detail="Photo not found")
@@ -62,6 +68,7 @@ def patch_photo(photo_hash: str, payload: PatchPhotoRequest, db: Database = Depe
     user_override = row["user_override"] if payload.user_override is None else int(payload.user_override)
     skip_reason = payload.skip_reason if "skip_reason" in payload.model_fields_set else row["skip_reason"]
     captured_at = row["captured_at"]
+    capture_date_changed = False
     warnings_json = row["warnings_json"] if "warnings_json" in row.keys() else "[]"
     if payload.skipped is False:
         user_override = 1
@@ -69,7 +76,9 @@ def patch_photo(photo_hash: str, payload: PatchPhotoRequest, db: Database = Depe
     elif payload.skipped is True and skip_reason is None:
         skip_reason = "user_skipped"
     if payload.captured_at is not None:
-        captured_at = _parse_capture_datetime(payload.captured_at).isoformat(sep=" ")
+        parsed = _parse_capture_datetime(payload.captured_at)
+        capture_date_changed = parsed.date() != parse_capture_datetime(row["captured_at"]).date()
+        captured_at = parsed.isoformat(sep=" ")
         user_override = 1
         warnings = _parse_warnings(warnings_json)
         if "captured_at_user_override" not in warnings:
@@ -79,6 +88,10 @@ def patch_photo(photo_hash: str, payload: PatchPhotoRequest, db: Database = Depe
         "UPDATE photos SET skipped = ?, user_override = ?, skip_reason = ?, captured_at = ?, warnings_json = ? WHERE hash = ?",
         (skipped, user_override, skip_reason, captured_at, warnings_json, photo_hash),
     )
+    if capture_date_changed:
+        # The hair comparison image contains a date label. Other derived
+        # analyses and exports already fingerprint captured_at for freshness.
+        (config.hair_composites_dir / f"{photo_hash}.jpg").unlink(missing_ok=True)
     updated = db.fetchone("SELECT * FROM photos WHERE hash = ?", (photo_hash,))
     return _photo_response(updated)
 
@@ -153,10 +166,7 @@ def _photo_response(row) -> PhotoResponse:
 
 def _parse_capture_datetime(value: str) -> datetime:
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        if parsed.tzinfo is not None:
-            parsed = parsed.astimezone().replace(tzinfo=None)
-        return parsed
+        return parse_capture_datetime(value)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid captured_at: {exc}") from exc
 

@@ -14,6 +14,7 @@ from typing import Callable
 import numpy as np
 from PIL import Image
 
+from selfietl.capture_dates import parse_capture_datetime
 from selfietl.config import AppConfig, RenderConfig
 from selfietl.db import Database
 from selfietl.pipeline.align import align_project, aligned_path
@@ -505,16 +506,8 @@ def _ensure_even_with_landmarks(image: Image.Image, landmarks: np.ndarray) -> tu
     return image.crop((0, 0, even[0], even[1])), landmarks
 
 
-def _parse_datetime(value) -> datetime:
-    if isinstance(value, datetime):
-        return value
-    text = str(value)
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
-        try:
-            return datetime.strptime(text, fmt)
-        except ValueError:
-            continue
-    return datetime.fromisoformat(text)
+def _parse_datetime(value: str | datetime) -> datetime:
+    return parse_capture_datetime(value)
 
 
 def _parse_date_boundary(value: str | None, is_end: bool) -> datetime | None:

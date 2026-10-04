@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from selfietl.api.deps import get_config, get_db
+from selfietl.capture_dates import parse_capture_datetime
 from selfietl.config import AppConfig
 from selfietl.db import Database
 from selfietl.jobs.runner import CancellationRequested, JobsPaused, runner
@@ -82,7 +83,7 @@ async def preview_capture_uploads(files: list[UploadFile] = File(...)):
 @router.post("/capture", response_model=StartJobResponse)
 async def capture_selfie(
     file: UploadFile = File(...),
-    captured_at: str | None = Query(default=None, description="Optional override for capture time, ISO 8601"),
+    captured_at: str | None = Query(default=None, description="ISO 8601 capture time; preserves the supplied local date and clock time"),
     db: Database = Depends(get_db),
     config: AppConfig = Depends(get_config),
 ):
@@ -96,13 +97,15 @@ async def capture_selfie(
     if runner.has_active_jobs():
         raise HTTPException(status_code=409, detail="The app is busy. Try again in a moment.")
 
-    inferred_dt = _infer_upload_captured_at(contents, file.filename or "selfie.jpg")
+    captured_dt = captured_dt or _infer_upload_captured_at(contents, file.filename or "selfie.jpg")
+    if captured_dt is None:
+        raise HTTPException(status_code=400, detail="Photo has no original capture timestamp. Choose its original date and time before importing.")
 
     saved_path = import_to_inbox(
         config,
         contents=contents,
         filename=file.filename or "selfie.jpg",
-        captured_at=captured_dt or inferred_dt,
+        captured_at=captured_dt,
     )
     project_id = _ensure_primary_project(db, config)
 
@@ -153,13 +156,15 @@ async def capture_photo_batch(
             _cleanup_saved_uploads(saved)
             raise HTTPException(status_code=413, detail="Combined upload is larger than the 250 MB batch limit")
 
-        inferred_dt = _infer_upload_captured_at(contents, filename)
-        captured_dt = captured_overrides[index]
+        captured_dt = captured_overrides[index] or _infer_upload_captured_at(contents, filename)
+        if captured_dt is None:
+            _cleanup_saved_uploads(saved)
+            raise HTTPException(status_code=400, detail=f"{filename} has no original capture timestamp. Choose its original date and time before importing.")
         saved_path = import_to_inbox(
             config,
             contents=contents,
             filename=filename,
-            captured_at=captured_dt or inferred_dt,
+            captured_at=captured_dt,
         )
         saved.append(
             {
@@ -241,10 +246,7 @@ def _parse_capture_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        if parsed.tzinfo is not None:
-            parsed = parsed.astimezone().replace(tzinfo=None)
-        return parsed
+        return parse_capture_datetime(value)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid captured_at: {exc}") from exc
 
@@ -296,7 +298,7 @@ def _preview_upload(index: int, filename: str, path: Path, size: int) -> dict[st
         "filename": filename,
         "file_size": size,
         "supported": True,
-        "captured_at": metadata["captured_at"].isoformat(sep=" "),
+        "captured_at": metadata["captured_at"].isoformat(sep=" ") if metadata["captured_at"] is not None else None,
         "captured_at_source": metadata.get("captured_at_source"),
         "camera_make": metadata.get("camera_make"),
         "camera_model": metadata.get("camera_model"),

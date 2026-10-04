@@ -10,6 +10,8 @@ from typing import Any
 
 from PIL import Image, ImageCms, ImageOps
 
+from selfietl.capture_dates import parse_capture_datetime
+
 try:
     import piexif
 except Exception:  # pragma: no cover - optional at import time
@@ -109,26 +111,22 @@ def exif_metadata(path: str | Path) -> dict[str, Any]:
                 warnings.append("datetime_from_filename")
                 if fallback_exif_date and abs((fallback_exif_date - filename_captured_at).total_seconds()) > 3600:
                     warnings.append("exif_datetime_ignored_for_filename")
-            elif fallback_exif_date:
-                captured_at = fallback_exif_date
-                captured_at_source = "exif_datetime"
-                warnings.append("missing_datetime_original")
-                warnings.append("datetime_from_exif_datetime")
             make = _clean_exif_text(_pil_exif_value(exif, 271) or _piexif_value(piexif_data, "0th", 271))
             model = _clean_exif_text(_pil_exif_value(exif, 272) or _piexif_value(piexif_data, "0th", 272))
     except Exception as exc:
         warnings.append(f"exif_read_failed:{exc.__class__.__name__}")
 
     if captured_at is None:
-        warnings.append("missing_datetime_original")
+        if "missing_datetime_original" not in warnings:
+            warnings.append("missing_datetime_original")
         if filename_captured_at:
             captured_at = filename_captured_at
             captured_at_source = "filename"
             warnings.append("datetime_from_filename")
         else:
-            captured_at = datetime.fromtimestamp(path.stat().st_mtime)
-            captured_at_source = "file_modified_time"
-            warnings.append("datetime_from_file_modified_time")
+            # File/EXIF modification dates can reflect a copy or edit, not the
+            # original photo. Missing capture dates must be supplied explicitly.
+            warnings.append("missing_capture_timestamp")
 
     return {
         "captured_at": captured_at,
@@ -143,7 +141,7 @@ def parse_exif_datetime(value: str) -> datetime | None:
     for fmt in ("%Y:%m:%d %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y:%m:%d %H:%M:%S%z"):
         try:
             parsed = datetime.strptime(value, fmt)
-            return parsed.replace(tzinfo=None)
+            return parse_capture_datetime(parsed)
         except ValueError:
             continue
     return None
@@ -152,6 +150,8 @@ def parse_exif_datetime(value: str) -> datetime | None:
 def parse_filename_datetime(value: str) -> datetime | None:
     patterns = (
         r"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})[_ -](?P<hour>\d{2})-(?P<minute>\d{2})-(?P<second>\d{2})",
+        r"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})T(?P<hour>\d{2}):(?P<minute>\d{2}):(?P<second>\d{2})",
+        r"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})[_ -](?P<hour>\d{2})(?P<minute>\d{2})(?P<second>\d{2})",
         r"(?P<year>\d{4})(?P<month>\d{2})(?P<day>\d{2})[_ -]?(?P<hour>\d{2})(?P<minute>\d{2})(?P<second>\d{2})",
     )
     for pattern in patterns:
