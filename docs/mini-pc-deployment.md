@@ -40,9 +40,24 @@ sudo systemctl restart selfietl.service
 
 The systemd service binds to `127.0.0.1:8766`. Tailscale Serve points `/` at the local Caddy portal on `127.0.0.1:8700`; Caddy routes `/selfietl/*`, `/assets/*`, and SelfieTL API requests to `127.0.0.1:8766` while leaving the other mini PC apps in place.
 
+## Safari cannot establish a secure connection
+
+The normal SelfieTL URL is private to the Tailscale network. Use the full HTTPS hostname above with Tailscale connected and **Use Tailscale DNS settings** enabled on the client.
+
+Other services on this machine use Funnel on separate ports. That can make the hostname's public DNS point at a Funnel relay, while SelfieTL on port 443 remains private. A connected Tailscale client can still fail in Safari if its DNS lookup or browser traffic bypasses the private route. The public route then fails during TLS, before any request reaches SelfieTL.
+
+Check the private endpoint with normal certificate verification:
+
+```bash
+curl --resolve davis-mini-pc-1.tail59b3f5.ts.net:443:100.96.182.111 \
+  https://davis-mini-pc-1.tail59b3f5.ts.net/selfietl/api/health
+```
+
+If this succeeds while Safari fails, check the phone's Tailscale DNS setting, reconnect Tailscale, and retry the HTTPS URL in a new tab. If necessary, check whether another VPN, DNS profile, or Safari Private Relay is changing the path. Compare the certificate and server response before restarting the app. Enabling public Funnel for the whole portal changes access to personal data and is not a substitute for repairing private connectivity.
+
 ## Daily selfie + auto-render
 
-The mobile-first UI assumes the app is opened from an iPhone over Tailscale. Capture works from any browser using the standard `<input type="file" capture="user">` element, which opens the iOS native camera with the front lens — no HTTPS or Tailscale Funnel required. The iPhone uploads HEIC or JPEG; the backend handles both.
+The mobile-first UI assumes the app is opened from an iPhone over Tailscale using the HTTPS URL. Capture uses the standard `<input type="file" capture="user">` element, which opens the iOS native camera with the front lens. The iPhone uploads HEIC or JPEG; the backend handles both.
 
 The daily auto-render is driven by `selfietl.scheduler.AutoRenderScheduler`, started in the FastAPI lifespan. By default it runs at **03:00 local time** of the mini PC. Settings live at `~/.selfietl/auto_render.json` and can be edited from the **Auto-render** page in the app, or directly on disk:
 
