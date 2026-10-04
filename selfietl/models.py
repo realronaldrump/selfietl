@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .config import RenderConfig
 
@@ -232,3 +232,22 @@ class HairExportRequest(BaseModel):
     seconds_per_selfie: float = Field(default=1.0, ge=0.25, le=4.0)
     width: int = Field(default=1080, ge=360, le=2160)
     height: int = Field(default=1350, ge=450, le=2700)
+
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def validate_hair_date(cls, value: str | None) -> str | None:
+        from datetime import date
+        return date.fromisoformat(value).isoformat() if value else None
+
+    @field_validator("width", "height")
+    @classmethod
+    def validate_even_dimensions(cls, value: int) -> int:
+        if value % 2:
+            raise ValueError("Video dimensions must be even")
+        return value
+
+    @model_validator(mode="after")
+    def validate_hair_range(self) -> "HairExportRequest":
+        if self.start_date and self.end_date and self.start_date > self.end_date:
+            raise ValueError("Start date must be on or before end date")
+        return self

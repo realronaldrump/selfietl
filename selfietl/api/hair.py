@@ -54,7 +54,7 @@ async def recompute(
     _ensure_project(db, project_id)
     name = f"hair_analysis:{project_id}"
     if runner.has_active_jobs(except_name=name):
-        raise HTTPException(status_code=409, detail="The app is already working. Wait for the current job before tracing hair.")
+        raise HTTPException(status_code=409, detail="Wait for the current job to finish before analyzing hair.")
     try:
         job = runner.start(
             name,
@@ -116,7 +116,15 @@ async def export_hair(
 ):
     _ensure_project(db, project_id)
     if runner.has_active_jobs():
-        raise HTTPException(status_code=409, detail="The app is already working. Wait before building the hair movie.")
+        raise HTTPException(status_code=409, detail="Wait for the current job to finish before creating a video.")
+    manifest = get_project_hair(db, config, project_id)
+    if manifest["status"] != "ready":
+        raise HTTPException(status_code=409, detail="Finish hair analysis before creating a video.")
+    included = [frame for frame in manifest["frames"] if frame["eligible"] and not frame["excluded"]
+                and (not payload.start_date or frame["date"] >= payload.start_date)
+                and (not payload.end_date or frame["date"] <= payload.end_date)]
+    if len(included) < 2:
+        raise HTTPException(status_code=400, detail="Select at least two included days for a video.")
     config_payload = payload.model_dump(mode="json")
     export_id = create_hair_export(db, config, project_id, config_payload)
     try:

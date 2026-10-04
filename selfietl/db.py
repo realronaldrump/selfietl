@@ -117,6 +117,7 @@ CREATE TABLE IF NOT EXISTS haircut_events (
     source TEXT NOT NULL CHECK(source IN ('automatic', 'manual')),
     status TEXT NOT NULL CHECK(status IN ('provisional', 'suggested', 'confirmed', 'dismissed')),
     score REAL,
+    evidence_json TEXT NOT NULL DEFAULT '{}',
     created_at TIMESTAMP NOT NULL,
     updated_at TIMESTAMP NOT NULL,
     UNIQUE(project_id, first_after_photo_hash)
@@ -173,6 +174,7 @@ class Database:
             _ensure_column(conn, "projects", "last_scanned_at", "TIMESTAMP")
             _ensure_column(conn, "face_shape_profiles", "trend_json", "TEXT")
             _ensure_column(conn, "face_shape_profiles", "trend_cache_key", "TEXT")
+            _ensure_column(conn, "haircut_events", "evidence_json", "TEXT NOT NULL DEFAULT '{}'")
 
     def fetchone(self, query: str, params: tuple[Any, ...] = ()) -> sqlite3.Row | None:
         with self.connect() as conn:

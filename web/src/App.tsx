@@ -194,7 +194,10 @@ function BackHeader({ title, onBack }: { title: string; onBack: () => void }) {
 }
 
 function DesktopApp({ onSwitchToMobile }: { onSwitchToMobile: () => void }) {
-  const [page, setPage] = useState<PageKey>(() => initialPageFromUrl("today") as PageKey);
+  const [page, setPage] = useState<PageKey>(() => {
+    const action = new URLSearchParams(window.location.search).get("action");
+    return action === "hair" || action === "shape" ? action : initialPageFromUrl("today") as PageKey;
+  });
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(() => {
     const stored = localStorage.getItem(PROJECT_KEY);
     return stored ? Number(stored) : null;

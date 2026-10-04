@@ -12,13 +12,16 @@ from selfietl.config import load_config
 from selfietl.db import Database
 from selfietl.pipeline.face_shape import FACE_OVAL
 from selfietl.pipeline.hair import (
+    ALGORITHM_VERSION,
     _canvas_assets,
     _signed_distance,
+    alignment_signature,
     create_hair_export,
     hair_playback_path,
     hair_metrics,
     mask_iou,
     project_hair_revision,
+    source_signature,
     refine_confidence_mask,
     render_hair_export,
     update_haircut_suggestions,
@@ -73,17 +76,16 @@ def _project(tmp_path: Path, masks: list[np.ndarray]):
         )
         db.execute("INSERT INTO project_photos (project_id, photo_hash) VALUES (?, ?)", (project_id, photo_hash))
         metrics = hair_metrics(mask, aligned_landmarks)
-        stat = aligned_landmarks_path.stat()
-        signature = __import__("hashlib").sha256(f"hair-v1|{stat.st_size}|{stat.st_mtime_ns}".encode()).hexdigest()
+        signature = alignment_signature(aligned_landmarks_path)
         db.execute(
             """
             INSERT INTO hair_measurements (
                 photo_hash, algorithm_version, source_signature, alignment_signature,
                 source_mask_path, aligned_mask_path, metrics_json, quality_score,
                 eligible, reasons_json, computed_at, updated_at
-            ) VALUES (?, 'hair-v1', ?, ?, ?, ?, ?, .9, 1, '[]', '2024-01-01', '2024-01-01')
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, .9, 1, '[]', '2024-01-01', '2024-01-01')
             """,
-            (photo_hash, f"source-{index}", signature, str(source_mask_path), str(mask_path), json.dumps(metrics)),
+            (photo_hash, ALGORITHM_VERSION, source_signature(source, landmark_path), signature, str(source_mask_path), str(mask_path), json.dumps(metrics)),
         )
     return config, db, project_id
 
@@ -151,14 +153,18 @@ def test_persistent_shorter_shape_creates_confirmable_haircut(tmp_path):
     long[5:92, 12:88] = True
     short = np.zeros((120, 100), dtype=bool)
     short[12:58, 24:76] = True
-    config, db, project_id = _project(tmp_path, [long, short, short])
+    config, db, project_id = _project(tmp_path, [long, long, short, short, short])
 
     count = update_haircut_suggestions(db, config, project_id)
     event = db.fetchone("SELECT * FROM haircut_events WHERE project_id = ?", (project_id,))
 
     assert count == 1
     assert event["status"] == "suggested"
-    assert event["first_after_photo_hash"] == "hair-1"
+    assert event["first_after_photo_hash"] == "hair-2"
+    evidence = json.loads(event["evidence_json"])
+    assert evidence["following_days"] == 2
+    assert evidence["earliest_date"] == "2024-01-05"
+    assert evidence["latest_date"] == "2024-01-07"
 
 
 def test_hair_api_manifest_exclusion_and_manual_haircuts(tmp_path):
@@ -223,3 +229,273 @@ def test_hair_migration_is_idempotent(tmp_path):
     db = Database(config.db_path)
     tables = {row["name"] for row in db.fetchall("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert {"hair_measurements", "haircut_events", "hair_exports"}.issubset(tables)
+
+
+def _shapes():
+    long = np.zeros((120, 100), dtype=bool)
+    long[5:92, 12:88] = True
+    short = np.zeros_like(long)
+    short[12:58, 24:76] = True
+    return long, short
+
+
+def test_head_anchor_rejects_background_and_beard_components():
+    landmarks = _landmarks()[:, :2] * [100, 120]
+    confidence = np.zeros((120, 100), dtype=np.float32)
+    confidence[8:44, 28:72] = .9
+    confidence[76:90, 38:60] = .95  # Disconnected beard.
+    confidence[95:116, 78:99] = .95  # Unrelated lower-frame object.
+    mask, quality, _ = refine_confidence_mask(confidence, landmarks)
+    assert mask[20, 50]
+    assert not mask[82, 50]
+    assert not mask[100, 90]
+    assert quality > .8
+
+
+def test_invalid_probabilities_do_not_become_certain_hair():
+    confidence = np.full((40, 40), np.inf, dtype=np.float32)
+    mask, quality, reasons = refine_confidence_mask(confidence)
+    assert not mask.any()
+    assert quality == 0
+    assert "low_hair_confidence" in reasons
+
+
+def test_cropped_scalp_is_detected_even_with_a_small_border_contact():
+    confidence = np.zeros((100, 100), dtype=np.float32)
+    confidence[:35, 45:55] = .9
+    _, _, reasons = refine_confidence_mask(confidence)
+    assert "hair_touches_frame_edge" in reasons
+
+
+def test_hair_metrics_reject_degenerate_and_nonfinite_landmarks():
+    mask, _ = _shapes()
+    assert hair_metrics(mask, np.ones((478, 3))) == {}
+    points = _landmarks() * [100, 120, 1]
+    points[33, 0] = np.nan
+    assert hair_metrics(mask, points) == {}
+
+
+def test_metric_extents_ignore_a_single_distant_pixel():
+    _, mask = _shapes()
+    points = _landmarks() * [100, 120, 1]
+    original = hair_metrics(mask, points)
+    noisy = mask.copy()
+    noisy[0, 0] = True
+    measured = hair_metrics(noisy, points)
+    assert abs(measured["top_extent"] - original["top_extent"]) < .05
+    assert abs(measured["left_extent"] - original["left_extent"]) < .05
+
+
+def test_wet_or_shifted_hair_that_recovers_is_not_a_haircut(tmp_path):
+    long, short = _shapes()
+    config, db, project_id = _project(tmp_path, [long, long, short, long, long])
+    assert update_haircut_suggestions(db, config, project_id) == 0
+    assert not db.fetchall("SELECT * FROM haircut_events")
+
+
+def test_equal_area_styling_change_is_not_a_haircut(tmp_path):
+    long, _ = _shapes()
+    shifted = np.roll(long, 8, axis=1)
+    config, db, project_id = _project(tmp_path, [long, long, shifted, shifted, shifted])
+    assert update_haircut_suggestions(db, config, project_id) == 0
+    assert not db.fetchall("SELECT * FROM haircut_events")
+
+
+def test_same_day_bursts_do_not_confirm_a_haircut(tmp_path):
+    long, short = _shapes()
+    config, db, project_id = _project(tmp_path, [long, long, short, short, short])
+    db.execute("UPDATE photos SET captured_at = '2024-01-07 12:00:00' WHERE hash IN ('hair-3', 'hair-4')")
+    assert update_haircut_suggestions(db, config, project_id) == 0
+    event = db.fetchone("SELECT * FROM haircut_events")
+    assert event["status"] == "provisional"
+
+
+def test_camera_switch_and_long_gaps_do_not_generate_a_cut(tmp_path):
+    long, short = _shapes()
+    config, db, project_id = _project(tmp_path, [long, long, short, short, short])
+    db.execute("UPDATE photos SET camera_model = 'A' WHERE hash IN ('hair-0', 'hair-1')")
+    db.execute("UPDATE photos SET camera_model = 'B' WHERE hash NOT IN ('hair-0', 'hair-1')")
+    assert update_haircut_suggestions(db, config, project_id) == 0
+    db.execute("UPDATE photos SET camera_model = NULL")
+    db.execute("UPDATE photos SET captured_at = '2024-07-01 10:00:00' WHERE hash = 'hair-2'")
+    db.execute("UPDATE photos SET captured_at = '2024-07-04 10:00:00' WHERE hash = 'hair-3'")
+    db.execute("UPDATE photos SET captured_at = '2024-07-07 10:00:00' WHERE hash = 'hair-4'")
+    assert update_haircut_suggestions(db, config, project_id) == 0
+    assert not db.fetchall("SELECT * FROM haircut_events")
+
+
+def test_stale_suggestions_clear_but_confirmed_haircuts_survive(tmp_path):
+    from selfietl.pipeline.hair import create_haircut_event
+    long, short = _shapes()
+    config, db, project_id = _project(tmp_path, [long, long, short, short, short])
+    update_haircut_suggestions(db, config, project_id)
+    confirmed = create_haircut_event(db, project_id, "2023-12-01")
+    db.execute("UPDATE hair_measurements SET user_excluded = 1")
+    assert update_haircut_suggestions(db, config, project_id) == 0
+    events = db.fetchall("SELECT * FROM haircut_events")
+    assert len(events) == 1 and events[0]["id"] == confirmed["id"]
+
+
+def test_manifest_and_prediction_use_one_best_eligible_photo_per_day(tmp_path):
+    from selfietl.pipeline.hair import get_project_hair
+    _, short = _shapes()
+    config, db, project_id = _project(tmp_path, [short, short, short])
+    db.execute("UPDATE photos SET captured_at = '2024-01-01 11:00:00' WHERE hash = 'hair-1'")
+    db.execute("UPDATE hair_measurements SET quality_score = .99, eligible = 0 WHERE photo_hash = 'hair-1'")
+    manifest = get_project_hair(db, config, project_id)
+    assert [frame["hash"] for frame in manifest["frames"]] == ["hair-0", "hair-2"]
+    assert manifest["coverage"]["included"] == 2
+
+
+def test_new_unmeasured_photo_changes_revision_and_reports_pending(tmp_path):
+    from selfietl.pipeline.hair import get_project_hair
+    _, mask = _shapes()
+    config, db, project_id = _project(tmp_path, [mask, mask])
+    before = project_hair_revision(db, config, project_id)
+    db.execute("DELETE FROM hair_measurements WHERE photo_hash = 'hair-1'")
+    assert project_hair_revision(db, config, project_id) != before
+    manifest = get_project_hair(db, config, project_id)
+    assert manifest["status"] == "stale"
+    assert manifest["analysis"]["pending_photos"] == 1
+
+
+def test_haircut_timer_works_without_hair_masks_and_dates_are_validated(tmp_path):
+    from selfietl.pipeline.hair import create_haircut_event, get_project_hair
+    _, mask = _shapes()
+    config, db, project_id = _project(tmp_path, [mask])
+    db.execute("DELETE FROM hair_measurements")
+    first = create_haircut_event(db, project_id, "2024-01-02")
+    assert create_haircut_event(db, project_id, "2024-01-02")["id"] == first["id"]
+    manifest = get_project_hair(db, config, project_id)
+    assert manifest["last_haircut"]["days_since"] == (date.today() - date(2024, 1, 2)).days
+    assert len(manifest["haircuts"]) == 1
+    with TestClient(create_app(config)) as client:
+        future = (date.today() + timedelta(days=1)).isoformat()
+        assert client.post(f"/api/projects/{project_id}/haircuts", json={"event_date": future}).status_code == 400
+        assert client.patch(f"/api/haircuts/{first['id']}", json={"event_date": ""}).status_code == 400
+
+
+def test_export_rejects_bad_ranges_or_one_day_without_queuing(tmp_path):
+    _, mask = _shapes()
+    config, db, project_id = _project(tmp_path, [mask])
+    with TestClient(create_app(config)) as client:
+        url = f"/api/projects/{project_id}/hair/export"
+        assert client.post(url, json={"start_date": "2024-01-05", "end_date": "2024-01-01"}).status_code == 422
+        assert client.post(url, json={"width": 361}).status_code == 422
+        assert client.post(url, json={}).status_code == 400
+    assert not db.fetchall("SELECT * FROM hair_exports")
+
+
+def test_upgrade_reuses_valid_raw_masks_and_preserves_exclusions(tmp_path, monkeypatch):
+    import hashlib
+    from selfietl.pipeline import hair
+    _, mask = _shapes()
+    config, db, _ = _project(tmp_path, [mask])
+    path = config.inbox_dir / "hair-0.jpg"
+    stat = path.stat()
+    legacy = hashlib.sha256(f"hair-v1|{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}".encode()).hexdigest()
+    db.execute("UPDATE hair_measurements SET algorithm_version = 'hair-v1', source_signature = ?, user_excluded = 1", (legacy,))
+    monkeypatch.setattr(hair, "create_hair_segmenter", lambda _: (_ for _ in ()).throw(AssertionError("Raw cache should be reused")))
+    hair.analyze_photo_hair(db, config, "hair-0")
+    row = db.fetchone("SELECT * FROM hair_measurements")
+    assert row["algorithm_version"] == ALGORITHM_VERSION
+    assert row["user_excluded"] == 1
+    assert row["eligible"] == 1
+
+
+def test_failed_recompute_does_not_leave_old_results_eligible(tmp_path, monkeypatch):
+    from selfietl.pipeline import hair
+    _, mask = _shapes()
+    config, db, project_id = _project(tmp_path, [mask])
+    monkeypatch.setattr(hair, "analyze_photo_hair", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("broken model")))
+    result = hair.recompute_project_hair(db, config, project_id)
+    manifest = hair.get_project_hair(db, config, project_id)
+    assert result["failed"] == 1
+    assert manifest["status"] == "ready"
+    assert manifest["analysis"]["failed_photos"] == 1
+    assert manifest["coverage"]["included"] == 0
+    assert manifest["frames"][0]["composite_url"] is None
+
+
+def test_each_saved_selfie_rechecks_and_confirms_persistent_changes(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from datetime import datetime
+    from selfietl.pipeline import hair, single
+    from selfietl.pipeline.detect import DetectionResult
+    long, short = _shapes()
+    config, db, project_id = _project(tmp_path, [long, long, short, short])
+    hair.update_haircut_suggestions(db, config, project_id)
+    assert db.fetchone("SELECT status FROM haircut_events")["status"] == "provisional"
+    monkeypatch.setattr(single, "detect_landmarks", lambda *a: DetectionResult(_landmarks(), (.1, .1, .8, .8), 1, 0, 0, 0, .3, .05, [], "test"))
+    probability = short.astype(np.float32)[..., None] * .95
+    segmenter = SimpleNamespace(segment=lambda _: SimpleNamespace(confidence_masks=[SimpleNamespace(numpy_view=lambda: 1 - probability), SimpleNamespace(numpy_view=lambda: probability)]), close=lambda: None)
+    mp = SimpleNamespace(Image=lambda **kw: None, ImageFormat=SimpleNamespace(SRGB=1))
+    monkeypatch.setattr(hair, "create_hair_segmenter", lambda _: (segmenter, mp))
+    source = config.inbox_dir / "new-selfie.jpg"
+    Image.new("RGB", (100, 120), "blue").save(source)
+    result = single.process_single_photo(db, config, project_id, source, captured_at=datetime(2024, 1, 13, 10))
+    event = db.fetchone("SELECT * FROM haircut_events")
+    manifest = hair.get_project_hair(db, config, project_id)
+    assert not result["skipped"]
+    assert not any("hair" in warning for warning in result["warnings"])
+    assert event["status"] == "suggested"
+    assert json.loads(event["evidence_json"])["following_days"] == 2
+    assert manifest["analysis"]["latest_analyzed_date"] == "2024-01-13"
+    assert manifest["frames"][-1]["hash"] == result["hash"]
+
+
+def test_normalized_metrics_are_invariant_to_scale_and_roll():
+    _, mask = _shapes()
+    landmarks = _landmarks() * [100, 120, 1]
+    original = hair_metrics(mask, landmarks)
+    scaled = np.asarray(Image.fromarray(mask).resize((200, 240), Image.Resampling.NEAREST))
+    measured = hair_metrics(scaled, landmarks * [2, 2, 1])
+    assert abs(original["area"] - measured["area"]) < .001
+    assert abs(original["top_extent"] - measured["top_extent"]) < .05
+    rotated = np.rot90(mask)
+    rotated_points = landmarks.copy()
+    rotated_points[:, 0] = landmarks[:, 1]
+    rotated_points[:, 1] = 99 - landmarks[:, 0]
+    rolled = hair_metrics(rotated, rotated_points)
+    assert abs(original["area"] - rolled["area"]) < .001
+    assert abs(original["top_extent"] - rolled["top_extent"]) < .05
+
+
+def test_growth_summary_uses_comparable_recent_days_after_confirmed_cut(tmp_path):
+    from selfietl.pipeline.hair import create_haircut_event, get_project_hair
+    long, short = _shapes()
+    config, db, project_id = _project(tmp_path, [short, short, short, long, long, long])
+    create_haircut_event(db, project_id, "2024-01-01")
+    for index, day in enumerate((1, 4, 7), start=3):
+        db.execute("UPDATE photos SET captured_at = ? WHERE hash = ?", (f"2024-07-{day:02d} 10:00:00", f"hair-{index}"))
+    change = get_project_hair(db, config, project_id)["change_since_haircut"]
+    assert change["area_change_percent"] > 100
+    assert change["baseline_date"] == "2024-01-01"
+    assert change["latest_date"] == "2024-07-07"
+    db.execute("UPDATE photos SET camera_model = 'different' WHERE hash IN ('hair-3', 'hair-4', 'hair-5')")
+    db.execute("UPDATE photos SET camera_model = 'original' WHERE hash IN ('hair-0', 'hair-1', 'hair-2')")
+    assert get_project_hair(db, config, project_id)["change_since_haircut"] is None
+
+
+def test_new_canonical_is_realigned_before_hair_measurement(tmp_path):
+    import os
+    from selfietl.pipeline.hair import analyze_photo_hair, get_project_hair
+    _, mask = _shapes()
+    config, db, project_id = _project(tmp_path, [mask])
+    aligned = config.aligned_landmarks_dir / "hair-0.npz"
+    original_timestamp = aligned.stat().st_mtime_ns
+    os.utime(aligned, ns=(original_timestamp - 10000000000, original_timestamp - 10000000000))
+    assert get_project_hair(db, config, project_id)["status"] == "stale"
+    analyze_photo_hair(db, config, "hair-0")
+    assert aligned.stat().st_mtime_ns > original_timestamp
+    assert get_project_hair(db, config, project_id)["status"] == "ready"
+
+
+def test_adding_known_cut_confirms_existing_same_date_suggestion(tmp_path):
+    from selfietl.pipeline.hair import create_haircut_event
+    long, short = _shapes()
+    config, db, project_id = _project(tmp_path, [long, long, short, short, short])
+    update_haircut_suggestions(db, config, project_id)
+    event = create_haircut_event(db, project_id, "2024-01-07")
+    assert event["status"] == "confirmed"
+    assert len(db.fetchall("SELECT * FROM haircut_events")) == 1

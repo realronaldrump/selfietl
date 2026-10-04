@@ -95,6 +95,7 @@ export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => 
       queryClient.invalidateQueries({ queryKey: ["today"] });
       queryClient.invalidateQueries({ queryKey: ["calendar"] });
       queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["hair"] });
       if (job.status === "failed" || job.status === "cancelled") {
         setError(job.error ?? job.message ?? "Capture failed");
       }

@@ -6,7 +6,9 @@ import { Timeline } from "@/pages/Timeline";
 import { Hair } from "@/pages/Hair";
 
 export function Progress() {
-  const [view, setView] = useState<"shape" | "hair" | "calendar">("shape");
+  const [view, setView] = useState<"shape" | "hair" | "calendar">(() =>
+    new URLSearchParams(window.location.search).get("action") === "hair" ? "hair" : "shape"
+  );
   return (
     <div>
       <div className="mx-auto mb-4 grid max-w-lg grid-cols-3 rounded-lg border border-ink/10 bg-paper p-1 shadow-line">

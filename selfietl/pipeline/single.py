@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -14,7 +14,7 @@ from selfietl.pipeline.align import align_photo, aligned_path
 from selfietl.pipeline.canonical import canonical_pixels
 from selfietl.pipeline.detect import detect_landmarks
 from selfietl.pipeline.face_shape import measure_photo
-from selfietl.pipeline.hair import analyze_photo_hair
+from selfietl.pipeline.hair import _record_hair_failure, analyze_photo_hair, update_haircut_suggestions
 from selfietl.pipeline.images import (
     exif_metadata,
     file_size,
@@ -273,15 +273,22 @@ def process_single_photo(
 
     if not should_skip:
         if progress:
-            progress("capture", 5, 6, "Tracing hair silhouette")
+            progress("capture", 5, 7, "Analyzing hair")
         try:
             analyze_photo_hair(db, config, photo_hash)
         except Exception as exc:
             # Hair is an enhancement and must never reject an otherwise good selfie.
             hair_warnings.append(f"hair_analysis_failed:{exc.__class__.__name__}")
+            _record_hair_failure(db, config, db.fetchone("SELECT hash, path, landmarks_path FROM photos WHERE hash = ?", (photo_hash,)))
+        if progress:
+            progress("capture", 6, 7, "Checking for a haircut")
+        try:
+            update_haircut_suggestions(db, config, project_id, since=meta["captured_at"].date() - timedelta(days=42))
+        except Exception as exc:
+            hair_warnings.append(f"haircut_detection_failed:{exc.__class__.__name__}")
 
     if progress:
-        progress("capture", 6, 6, "Selfie added")
+        progress("capture", 7, 7, "Selfie added")
 
     return {
         "hash": photo_hash,

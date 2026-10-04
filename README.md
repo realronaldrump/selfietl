@@ -67,4 +67,4 @@ By default, local data lives under `~/.selfietl`:
 
 Set `SELFIE_TL_HOME=/path/to/data` to use another data directory.
 
-The **Progress → Hair** view uses a local MediaPipe hair-segmentation model to build a fixed-face, black-and-white daily silhouette animation. The model downloads once on first use; source photos and generated masks remain on the SelfieTL machine.
+The **Progress → Hair** view tracks haircut dates and time since the last confirmed haircut, checks each saved selfie for sustained changes, and exports a daily hair-outline video. You can compare masks with the original photos and review before/after evidence for a possible haircut. Analysis runs locally; the segmentation model downloads once on first use. See [the hair analysis method](docs/hair-method.md) for the calculations and their limits.

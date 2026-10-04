@@ -177,14 +177,14 @@ async def capture_photo_batch(
         succeeded = 0
         failed = 0
         duplicates = 0
-        total_steps = max(1, len(saved) * 5)
+        total_steps = max(1, len(saved) * 7)
         for item_index, item in enumerate(saved):
             cancel_check()
 
             def item_progress(stage: str, done: int, total: int, message: str, *, idx: int = item_index) -> None:
                 progress(
                     stage,
-                    idx * 5 + min(done, 5),
+                    idx * 7 + round(7 * min(done / max(total, 1), 1)),
                     total_steps,
                     f"{idx + 1}/{len(saved)} {Path(item['filename']).name}: {message}",
                 )

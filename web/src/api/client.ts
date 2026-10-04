@@ -365,7 +365,8 @@ export type HairFrame = {
   reasons: string[];
   thumb_url: string;
   source_url: string;
-  composite_url: string;
+  composite_url: string | null;
+  metrics: Record<string, number>;
 };
 
 export type HaircutEvent = {
@@ -373,8 +374,17 @@ export type HaircutEvent = {
   event_date: string;
   first_after_photo_hash: string | null;
   source: "automatic" | "manual";
-  status: "suggested" | "confirmed" | "dismissed";
+  status: "provisional" | "suggested" | "confirmed" | "dismissed";
   score: number | null;
+  evidence: {
+    before_photo_hash?: string;
+    after_photo_hash?: string;
+    earliest_date?: string;
+    latest_date?: string;
+    baseline_days?: number;
+    following_days?: number;
+    area_drop_percent?: number;
+  };
 };
 
 export type HairManifest = {
@@ -385,6 +395,9 @@ export type HairManifest = {
   face_outline: number[][];
   frames: HairFrame[];
   haircuts: HaircutEvent[];
+  last_haircut: { id: number; event_date: string; days_since: number } | null;
+  analysis: { latest_photo_date: string | null; latest_analyzed_date: string | null; updated_at: string | null; pending_photos: number; failed_photos: number };
+  change_since_haircut: { area_change_percent: number; baseline_date: string; latest_date: string; baseline_days: number; recent_days: number } | null;
   latest_export: {
     id: number;
     status: string;
