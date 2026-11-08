@@ -12,15 +12,25 @@ Clients should send the intended local capture time rather than converting it
 to UTC first. The native app already does this for Photos-library dates.
 
 The Photos-library timestamp sent by the native app takes precedence over
-embedded metadata, including when a date was adjusted in Photos. Without a
-client timestamp, EXIF DateTimeOriginal supplies the photo date. When it is
-absent, the metadata reader recognizes date-stamped inbox, native upload, and
-legacy import filenames. File modification times and EXIF DateTime (the image
-modification date) never substitute for an original photo timestamp.
+embedded metadata, including when a date was adjusted in Photos. The metadata
+reader checks EXIF DateTimeOriginal, XMP capture dates, date-stamped filenames,
+and EXIF DateTimeDigitized in that order. EXIF DateTime records image changes.
 
-Missing dates stay missing in previews. Browser imports require the original
-date to be entered before upload; single and batch APIs reject undated imports
-before starting processing, and folder scans report and skip undated files.
+In the web app, a filename such as `capture_1759557552000.jpeg` can supply a
+date in the device's timezone when the file lacks a date in its metadata. For
+library imports, the filename timestamp must predate opening the picker so a
+temporary export name cannot assign the selection time. A fresh Camera capture
+can also use the camera file's timestamp from within that picker session.
+Review shows the source of each detected date and allows edits before upload.
+
+When the web picker delivers a copy without its date, select the photos in
+iPhone Photos, use **Share → Export Unmodified Originals**, and choose the saved
+images from Files in SelfieTL. If the date exists only in the Photos library,
+use the native app with Photos access or enter it in web review. The web app
+can keep the dated photos from a mixed selection. Library imports require a
+capture time recovered from the file or supplied in review. Single and batch
+APIs reject undated imports before processing, and folder scans report and
+skip undated files.
 Inbox writes also require a known capture time. A retry of a cataloged photo
 uses the saved catalog date so a date edit is retained. Date edits invalidate
 cached images containing the old date label; analysis and video fingerprints

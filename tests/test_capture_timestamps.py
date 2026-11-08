@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import piexif
 from fastapi.testclient import TestClient
-from PIL import Image
+from PIL import Image, PngImagePlugin
 
 from selfietl.api.capture import _parse_capture_datetime as parse_upload_datetime
 from selfietl.api.photos import _parse_capture_datetime as parse_edit_datetime
@@ -284,6 +284,48 @@ def test_import_uses_original_exif_instead_of_transfer_date(server_timezone, cap
     photo = result["photos"][0] if batch else result
     assert photo["captured_at"] == "2026-10-03 23:59:00"
     assert db.fetchone("SELECT captured_at FROM photos")["captured_at"] == datetime(2026, 10, 3, 23, 59)
+
+
+@pytest.mark.parametrize("batch", [False, True], ids=["single", "batch"])
+@pytest.mark.parametrize("metadata_source", ["exif_datetime_digitized", "xmp_capture_date"])
+def test_preview_and_import_recover_embedded_capture_dates(capture_client, tmp_path, batch, metadata_source):
+    client, db, _, _ = capture_client
+    image = Image.new("RGB", (32, 32), (100, 120, 140))
+    if metadata_source == "exif_datetime_digitized":
+        source = tmp_path / "photo.jpg"
+        image.save(source, exif=piexif.dump({
+            "0th": {piexif.ImageIFD.DateTime: "2026:10:04 01:00:00"},
+            "Exif": {
+                piexif.ExifIFD.DateTimeOriginal: "0000:00:00 00:00:00",
+                piexif.ExifIFD.DateTimeDigitized: "2026:10:03 23:59:12",
+            },
+        }))
+    else:
+        source = tmp_path / "photo.png"
+        pnginfo = PngImagePlugin.PngInfo()
+        pnginfo.add_itxt("XML:com.adobe.xmp", """<rdf:RDF
+          xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+          xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/">
+          <rdf:Description photoshop:DateCreated="2026-10-03T23:59:12-06:00"/>
+        </rdf:RDF>""")
+        image.save(source, pnginfo=pnginfo)
+
+    media_type = "image/jpeg" if source.suffix == ".jpg" else "image/png"
+    file = (source.name, source.read_bytes(), media_type)
+    preview_response = client.post("/api/capture/preview", files=[("files", file)])
+    preview = preview_response.json()["items"][0]
+    assert preview["captured_at"] == "2026-10-03 23:59:12"
+    assert preview["captured_at_source"] == metadata_source
+    assert "missing_capture_timestamp" not in preview["warnings"]
+
+    if batch:
+        response = client.post("/api/capture/batch", files=[("files", file)])
+    else:
+        response = client.post("/api/capture", files={"file": file})
+    result = completed_capture(client, response)
+    photo = result["photos"][0] if batch else result
+    assert photo["captured_at"] == "2026-10-03 23:59:12"
+    assert db.fetchone("SELECT captured_at FROM photos")["captured_at"] == datetime(2026, 10, 3, 23, 59, 12)
 
 
 @pytest.mark.parametrize("modification_exif", [False, True], ids=["no-exif", "modification-exif"])

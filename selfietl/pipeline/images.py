@@ -7,6 +7,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
 
 from PIL import Image, ImageCms, ImageOps
 
@@ -96,12 +97,11 @@ def exif_metadata(path: str | Path) -> dict[str, Any]:
             exif = image.getexif()
             piexif_data = _load_piexif(path)
             original_value = _pil_exif_value(exif, 36867) or _piexif_value(piexif_data, "Exif", 36867)
-            fallback_value = _pil_exif_value(exif, 306) or _piexif_value(piexif_data, "0th", 306)
-            original_date = parse_exif_datetime(_clean_exif_text(original_value) or "") if original_value else None
-            fallback_exif_date = parse_exif_datetime(_clean_exif_text(fallback_value) or "") if fallback_value else None
-            if original_date:
-                captured_at = original_date
-                captured_at_source = "exif_datetime_original"
+            original_date = parse_exif_datetime(_clean_exif_text(original_value) or "")
+            xmp_date = None if original_date else _xmp_capture_datetime(image)
+            if original_date or xmp_date:
+                captured_at = original_date or xmp_date
+                captured_at_source = "exif_datetime_original" if original_date else "xmp_capture_date"
                 if filename_captured_at and abs((filename_captured_at - captured_at).total_seconds()) > 3600:
                     warnings.append("filename_datetime_differs_from_exif")
             elif filename_captured_at:
@@ -109,8 +109,15 @@ def exif_metadata(path: str | Path) -> dict[str, Any]:
                 captured_at_source = "filename"
                 warnings.append("missing_datetime_original")
                 warnings.append("datetime_from_filename")
+                fallback_value = _pil_exif_value(exif, 306) or _piexif_value(piexif_data, "0th", 306)
+                fallback_exif_date = parse_exif_datetime(_clean_exif_text(fallback_value) or "")
                 if fallback_exif_date and abs((fallback_exif_date - filename_captured_at).total_seconds()) > 3600:
                     warnings.append("exif_datetime_ignored_for_filename")
+            else:
+                digitized_value = _pil_exif_value(exif, 36868) or _piexif_value(piexif_data, "Exif", 36868)
+                captured_at = parse_exif_datetime(_clean_exif_text(digitized_value) or "")
+                if captured_at is not None:
+                    captured_at_source = "exif_datetime_digitized"
             make = _clean_exif_text(_pil_exif_value(exif, 271) or _piexif_value(piexif_data, "0th", 271))
             model = _clean_exif_text(_pil_exif_value(exif, 272) or _piexif_value(piexif_data, "0th", 272))
     except Exception as exc:
@@ -138,12 +145,42 @@ def exif_metadata(path: str | Path) -> dict[str, Any]:
 
 
 def parse_exif_datetime(value: str) -> datetime | None:
-    for fmt in ("%Y:%m:%d %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y:%m:%d %H:%M:%S%z"):
-        try:
-            parsed = datetime.strptime(value, fmt)
-            return parse_capture_datetime(parsed)
-        except ValueError:
-            continue
+    match = re.fullmatch(
+        r"(?P<day>\d{4}[:-]\d{2}[:-]\d{2})[T ]"
+        r"(?P<clock>\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)"
+        r"(?: ?(?P<offset>Z|[+-]\d{2}:?\d{2}))?",
+        value.strip(),
+    )
+    if match is None:
+        return None
+    day = match["day"].replace(":", "-")
+    try:
+        return parse_capture_datetime(f"{day}T{match['clock']}{match['offset'] or ''}")
+    except ValueError:
+        return None
+
+
+def _xmp_capture_datetime(image: Image.Image) -> datetime | None:
+    raw = image.info.get("xmp") or image.info.get("XML:com.adobe.xmp")
+    if not raw and image.format == "TIFF":
+        raw = image.tag_v2.get(700)
+    if not isinstance(raw, (bytes, str)) or not raw or len(raw) > 1024 * 1024:
+        return None
+    try:
+        packet = raw.decode("utf-8-sig") if isinstance(raw, bytes) else raw
+        if "<!DOCTYPE" in packet:
+            return None
+        root = ElementTree.fromstring(packet.strip("\x00 \t\r\n"))
+    except (ElementTree.ParseError, UnicodeError):
+        return None
+
+    rdf = "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}"
+    descriptions = [node for block in root.iter(f"{rdf}RDF") for node in block.findall(f"{rdf}Description")]
+    for tag in ("{http://ns.adobe.com/exif/1.0/}DateTimeOriginal", "{http://ns.adobe.com/photoshop/1.0/}DateCreated"):
+        for node in descriptions:
+            captured_at = parse_exif_datetime(node.get(tag) or node.findtext(tag) or "")
+            if captured_at is not None:
+                return captured_at
     return None
 
 

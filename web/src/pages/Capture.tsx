@@ -16,6 +16,8 @@ import { Badge, Button, Input, PageFrame, Panel, ProgressBar, cn } from "@/compo
 import { useJobEvents } from "@/hooks/useJobEvents";
 
 type CaptureStep = "pick" | "preview" | "uploading" | "result";
+type PickerSource = "camera" | "library";
+type PhotoSelection = { source: PickerSource; openedAt: number; returnedAt: number };
 
 type UploadItem = {
   id: string;
@@ -77,6 +79,7 @@ export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => 
   const [error, setError] = useState<string | null>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const libraryInputRef = useRef<HTMLInputElement>(null);
+  const pickerOpenedAtRef = useRef<number | null>(null);
   const itemsRef = useRef<UploadItem[]>([]);
   const previewRequestRef = useRef(0);
 
@@ -106,7 +109,7 @@ export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => 
   const result = job?.result as BatchResult | null;
 
   const readyToUpload = useMemo(
-    () => items.length > 0 && items.every((item) => !item.metadataLoading && item.supported && item.capturedAtLocal),
+    () => items.length > 0 && items.every(hasUploadDate),
     [items],
   );
 
@@ -132,15 +135,20 @@ export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => 
 
   function pickFromCamera() {
     setError(null);
+    pickerOpenedAtRef.current = Date.now();
     cameraInputRef.current?.click();
   }
 
   function pickFromLibrary() {
     setError(null);
+    pickerOpenedAtRef.current = Date.now();
     libraryInputRef.current?.click();
   }
 
-  function handleSelectedFiles(fileList: FileList | null) {
+  function handleSelectedFiles(fileList: FileList | null, source: PickerSource) {
+    const returnedAt = Date.now();
+    const selection = { source, openedAt: pickerOpenedAtRef.current ?? returnedAt, returnedAt };
+    pickerOpenedAtRef.current = null;
     const files = Array.from(fileList ?? []);
     if (!files.length) return;
     const nextItems = files.map((file, index) => createUploadItem(file, index));
@@ -153,16 +161,16 @@ export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => 
     setJobId(null);
     setError(null);
     setStep("preview");
-    void loadPreviewMetadata(nextItems, requestId);
+    void loadPreviewMetadata(nextItems, requestId, selection);
   }
 
-  async function loadPreviewMetadata(uploadItems: UploadItem[], requestId: number) {
+  async function loadPreviewMetadata(uploadItems: UploadItem[], requestId: number, selection: PhotoSelection) {
     try {
       const response = await api.previewCapture(uploadItems.map((item) => item.file));
       if (previewRequestRef.current !== requestId) return;
       const byIndex = new Map(response.items.map((item) => [item.index, item]));
       setItems((current) =>
-        current.map((item) => applyPreviewItem(item, byIndex.get(item.index))),
+        current.map((item) => applyPreviewItem(item, byIndex.get(item.index), selection)),
       );
     } catch (err) {
       if (previewRequestRef.current !== requestId) return;
@@ -185,7 +193,7 @@ export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => 
           ? {
               ...item,
               capturedAtLocal: value,
-              adjusted: value !== item.originalCapturedAtLocal,
+              adjusted: value !== (item.originalCapturedAtLocal ?? ""),
             }
           : item,
       ),
@@ -203,6 +211,13 @@ export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => 
       setStep("pick");
       setError(null);
     }
+  }
+
+  function keepDatedPhotos() {
+    setItems((current) => {
+      revokeUploadItems(current.filter((item) => !hasUploadDate(item)));
+      return current.filter(hasUploadDate);
+    });
   }
 
   function reset() {
@@ -236,7 +251,7 @@ export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => 
         capture="user"
         className="hidden"
         onChange={(event) => {
-          handleSelectedFiles(event.target.files);
+          handleSelectedFiles(event.target.files, "camera");
           event.target.value = "";
         }}
       />
@@ -247,7 +262,7 @@ export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => 
         multiple
         className="hidden"
         onChange={(event) => {
-          handleSelectedFiles(event.target.files);
+          handleSelectedFiles(event.target.files, "library");
           event.target.value = "";
         }}
       />
@@ -263,6 +278,7 @@ export function Capture({ onBack, onDone }: { onBack: () => void; onDone: () => 
           onRetake={pickFromCamera}
           onChoose={pickFromLibrary}
           onRemove={removeItem}
+          onKeepDated={keepDatedPhotos}
           onDateChange={updateCapturedAt}
           error={error}
         />
@@ -370,6 +386,7 @@ function PreviewStep({
   onRetake,
   onChoose,
   onRemove,
+  onKeepDated,
   onDateChange,
   error,
 }: {
@@ -380,12 +397,16 @@ function PreviewStep({
   onRetake: () => void;
   onChoose: () => void;
   onRemove: (id: string) => void;
+  onKeepDated: () => void;
   onDateChange: (id: string, value: string) => void;
   error: string | null;
 }) {
   const adjusted = items.filter((item) => item.adjusted).length;
   const loading = items.some((item) => item.metadataLoading);
   const blocked = items.some((item) => !item.supported);
+  const unavailable = items.some((item) => item.supported && item.error);
+  const undated = items.filter((item) => item.supported && !item.error && !item.capturedAtLocal).length;
+  const dated = items.filter(hasUploadDate).length;
 
   return (
     <div className="space-y-3">
@@ -397,13 +418,32 @@ function PreviewStep({
               Each photo will land on the calendar date shown below.
             </p>
           </div>
-          <Badge tone={blocked ? "bad" : loading ? "warn" : "good"}>{items.length} selected</Badge>
+          <Badge tone={blocked ? "bad" : canUpload ? "good" : "warn"}>{items.length} selected</Badge>
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
-          {loading ? <Badge tone="warn">Reading metadata</Badge> : <Badge tone="good">Metadata ready</Badge>}
+          {loading ? <Badge tone="warn">Reading metadata</Badge> : null}
+          {!loading && unavailable ? <Badge tone="warn">Metadata unavailable</Badge> : null}
+          {!loading && undated > 0 ? <Badge tone="warn">{undated === 1 ? "1 needs a date" : `${undated} need dates`}</Badge> : null}
+          {canUpload && !unavailable ? <Badge tone="good">Metadata ready</Badge> : null}
           {adjusted ? <Badge>{adjusted} adjusted</Badge> : null}
           {blocked ? <Badge tone="bad">Remove unsupported files</Badge> : null}
         </div>
+        {!loading && undated > 0 ? (
+          <div className="mt-3 space-y-2 border-t border-ink/10 pt-3">
+            <p className="text-sm font-semibold leading-5 text-ink/70">
+              If the dates show in iPhone Photos, select the photos there and tap Share → Export Unmodified Originals.
+              Save them to Files, then choose those files here.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="secondary" onClick={onChoose} disabled={uploading}>Choose originals</Button>
+              {dated > 0 ? (
+                <Button size="sm" variant="ghost" onClick={onKeepDated} disabled={uploading}>
+                  Keep {dated} dated {dated === 1 ? "photo" : "photos"}
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
       </Panel>
 
       <div className="space-y-3">
@@ -455,6 +495,9 @@ function UploadReviewCard({
   onRemove: () => void;
   onDateChange: (value: string) => void;
 }) {
+  const warnings = item.warnings.filter((warning) =>
+    warning !== "missing_capture_timestamp" && warning !== "missing_datetime_original",
+  );
   return (
     <Panel className={cn("p-3", !item.supported && "border border-coral/35 bg-coral/10")}>
       <div className="grid grid-cols-[5.5rem_1fr] gap-3">
@@ -512,9 +555,9 @@ function UploadReviewCard({
           ) : null}
           {item.error ? (
             <div className="mt-2 text-xs font-bold leading-5 text-coral">{item.error}</div>
-          ) : item.warnings.length ? (
+          ) : warnings.length ? (
             <div className="mt-2 flex flex-wrap gap-1.5">
-              {item.warnings.slice(0, 3).map((warning) => (
+              {warnings.slice(0, 3).map((warning) => (
                 <Badge key={warning} tone="warn">
                   {humanWarning(warning)}
                 </Badge>
@@ -695,23 +738,27 @@ function createUploadItem(file: File, index: number): UploadItem {
   };
 }
 
-function applyPreviewItem(item: UploadItem, preview: CapturePreviewItem | undefined): UploadItem {
+function hasUploadDate(item: UploadItem) {
+  return !item.metadataLoading && item.supported && Boolean(item.capturedAtLocal);
+}
+
+function applyPreviewItem(item: UploadItem, preview: CapturePreviewItem | undefined, selection: PhotoSelection): UploadItem {
   if (!preview) {
     return {
       ...item,
-      originalCapturedAtLocal: item.originalCapturedAtLocal,
       metadataLoading: false,
       error: item.error ?? "Metadata preview did not return this photo",
     };
   }
-  const capturedAtLocal = preview.captured_at ? isoLikeToLocalInput(preview.captured_at) : item.capturedAtLocal;
+  const fallback = preview.supported && !preview.captured_at ? browserCaptureDate(item.file, selection) : null;
+  const capturedAtLocal = preview.captured_at ? isoLikeToLocalInput(preview.captured_at) : fallback?.value ?? "";
   return {
     ...item,
     filename: preview.filename || item.filename,
     fileSize: preview.file_size,
     capturedAtLocal,
-    originalCapturedAtLocal: capturedAtLocal,
-    capturedAtSource: preview.captured_at_source,
+    originalCapturedAtLocal: capturedAtLocal || null,
+    capturedAtSource: preview.captured_at_source ?? fallback?.source ?? null,
     cameraMake: preview.camera_make,
     cameraModel: preview.camera_model,
     width: preview.width,
@@ -722,6 +769,25 @@ function applyPreviewItem(item: UploadItem, preview: CapturePreviewItem | undefi
     error: preview.error,
     adjusted: false,
   };
+}
+
+function browserCaptureDate(file: File, selection: PhotoSelection) {
+  const match = /^capture_(\d{13})\.[a-z]+$/i.exec(file.name);
+  const filenameTime = match ? Number(match[1]) : null;
+  // A name generated while the library picker was open may date the export.
+  const latestFilenameTime = selection.source === "camera" ? selection.returnedAt : selection.openedAt;
+  if (filenameTime !== null && filenameTime < latestFilenameTime) {
+    return { value: deviceLocalTime(filenameTime), source: "capture_filename" };
+  }
+  if (selection.source === "camera" && file.lastModified >= selection.openedAt && file.lastModified <= selection.returnedAt) {
+    return { value: deviceLocalTime(file.lastModified), source: "camera_time" };
+  }
+  return null;
+}
+
+function deviceLocalTime(timestamp: number) {
+  const date = new Date(timestamp);
+  return new Date(timestamp - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 19);
 }
 
 function normalizeResult(result: BatchResult | null, items: UploadItem[]): Required<Pick<BatchResult, "photos">> & { total: number; succeeded: number; failed: number; duplicates: number } {
@@ -821,8 +887,12 @@ function humanWarning(warning: string) {
 function sourceLabel(source: string) {
   const labels: Record<string, string> = {
     exif_datetime_original: "EXIF original",
+    xmp_capture_date: "Embedded capture date",
+    exif_datetime_digitized: "Digital creation date",
     exif_datetime: "EXIF date",
     filename: "Filename",
+    capture_filename: "Capture filename",
+    camera_time: "Camera time",
     file_modified_time: "File time",
     user_override: "Adjusted",
   };
@@ -830,9 +900,8 @@ function sourceLabel(source: string) {
 }
 
 function sourceTone(source: string): "default" | "good" | "warn" | "bad" {
-  if (source === "exif_datetime_original") return "good";
-  if (source === "filename" || source === "exif_datetime") return "default";
-  if (source === "file_modified_time") return "warn";
+  if (source === "exif_datetime_original" || source === "xmp_capture_date") return "good";
+  if (source === "file_modified_time" || source === "exif_datetime_digitized") return "warn";
   return "default";
 }
 
